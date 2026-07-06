@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import re
 
 # Configuration de la page
@@ -14,35 +13,46 @@ if 'exclusions' not in st.session_state:
 # --- STYLE CSS PERSONNALISÉ ---
 st.markdown("""
 <style>
+    /* Cartes de KPIs */
     .metric-card {
-        background-color: #2b2b2b; border-radius: 8px; padding: 15px;
+        background-color: #262730; border-radius: 10px; padding: 20px 15px;
         text-align: center; border-left: 5px solid #00a8e8; margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
     .metric-card-red { border-left-color: #ff4b4b; }
-    .metric-value { font-size: 28px; font-weight: bold; color: white; }
-    .metric-label { font-size: 14px; color: #aaaaaa; }
+    .metric-value { font-size: 32px; font-weight: 800; color: white; line-height: 1.2; }
+    .metric-label { font-size: 15px; color: #cccccc; text-transform: uppercase; letter-spacing: 0.5px; }
+    .metric-subtext { font-size: 13px; color: #ff8a8a; margin-top: 5px; font-weight: bold; }
     
     /* Style Matrice Détail Meuble */
     table.meuble-grid {
-        width: 100%; border-collapse: collapse; text-align: center; color: #333; font-size: 12px;
+        width: 100%; border-collapse: separate; border-spacing: 2px; text-align: center; color: #333; font-size: 12px; margin-top: 10px;
     }
-    table.meuble-grid th { background-color: #2c3e50; color: white; padding: 10px; border: 1px solid #ddd; }
-    table.meuble-grid td { border: 1px solid #ddd; padding: 10px; width: 14%; vertical-align: middle; font-weight: bold; }
-    .cell-vide { background-color: #dcdde1; color: #7f8fa6; }
-    .cell-actif { background-color: #74b9ff; color: #000; }
-    .cell-dormant { background-color: #ff7675; color: #000; }
-    .cell-niveau { background-color: #bdc3c7; color: #2c3e50; font-weight: bold; }
+    table.meuble-grid th { background-color: #1e1e1e; color: #eee; padding: 12px; border-radius: 4px; border: none; }
+    table.meuble-grid td { padding: 12px; width: 14%; vertical-align: middle; font-weight: bold; border-radius: 4px; border: none; }
+    .cell-vide { background-color: #3a3b45; color: #888; }
+    .cell-actif { background-color: #00a8e8; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
+    .cell-dormant { background-color: #ff4b4b; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.2); }
+    .cell-niveau { background-color: #262730; color: #ccc; font-weight: bold; }
 
-    /* Forcer les couleurs des boutons de la grille interactive */
+    /* Esthétique améliorée pour les boutons de la grille interactive */
     button[kind="primary"] {
-        background-color: #ff4b4b !important; /* Rouge pour dormants */
-        border-color: #ff4b4b !important; color: white !important; padding: 0 !important;
+        background-color: #ff4b4b !important;
+        border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important;
+        box-shadow: 0 3px 5px rgba(255, 75, 75, 0.3) !important; transition: all 0.2s ease !important;
     }
+    button[kind="primary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(255, 75, 75, 0.5) !important; }
+    
     button[kind="secondary"] {
-        background-color: #0078ff !important; /* Bleu pour actifs */
-        border-color: #0078ff !important; color: white !important; padding: 0 !important;
+        background-color: #00a8e8 !important;
+        border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important;
+        box-shadow: 0 3px 5px rgba(0, 168, 232, 0.3) !important; transition: all 0.2s ease !important;
     }
-    /* Les boutons désactivés (vides) restent gris par défaut dans Streamlit */
+    button[kind="secondary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(0, 168, 232, 0.5) !important; }
+    
+    button:disabled {
+        background-color: #2b2b2b !important; color: #555 !important; border: 1px dashed #444 !important; box-shadow: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,32 +88,11 @@ if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
 
 
 # ==========================================
-# GESTION DES EXCLUSIONS (PANNEAU LATÉRAL)
+# PARAMÈTRES (PANNEAU LATÉRAL)
 # ==========================================
-st.sidebar.header("⚙️ Paramètres & Règles")
-
+st.sidebar.header("⚙️ Paramètres")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
-st.sidebar.divider()
 
-st.sidebar.subheader("🚫 Dérogations (Exclusions)")
-st.sidebar.caption("Les références ajoutées ici ne seront pas considérées comme dormantes.")
-
-with st.sidebar.expander("Gérer la liste d'exclusions"):
-    new_excl = st.text_input("Référence à exclure (PART) :")
-    new_comm = st.text_input("Motif / Justification :")
-    if st.button("➕ Ajouter l'exclusion"):
-        if new_excl:
-            st.session_state.exclusions[new_excl] = new_comm
-            st.rerun()
-            
-    if st.session_state.exclusions:
-        st.markdown("**Liste actuelle :**")
-        for excl, comm in list(st.session_state.exclusions.items()):
-            c1, c2 = st.columns([4, 1])
-            c1.markdown(f"<span style='font-size:12px;'><b>{excl}</b><br><i>{comm}</i></span>", unsafe_allow_html=True)
-            if c2.button("❌", key=f"del_{excl}", help="Supprimer cette exclusion"):
-                del st.session_state.exclusions[excl]
-                st.rerun()
 
 # ==========================================
 # EN-TÊTE ET KPIs
@@ -114,47 +103,53 @@ st.title("📦 Vue d'Ensemble Magasin")
 total_refs = df['PART'].nunique()
 total_locs = df['LOCATOR'].nunique()
 
-# Filtrer les dormants (plus anciens que le seuil ET ne faisant pas partie des exclusions)
 list_exclus = list(st.session_state.exclusions.keys())
 df_dormants = df[(df['Last consumption'] > seuil_dormant) & (~df['PART'].isin(list_exclus))]
 
 nb_refs_dormantes = df_dormants['PART'].nunique()
 nb_locs_dormants = df_dormants['LOCATOR'].nunique()
 
+# Calcul des pourcentages
+pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
+pct_locs = (nb_locs_dormants / total_locs * 100) if total_locs > 0 else 0
+
+# Nouvel ordre : Total Refs -> Dormants Refs -> Total Locs -> Dormants Locs
 col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-with col_kpi1: st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
-with col_kpi2: st.markdown(f"""<div class="metric-card"><div class="metric-label">Emplacements Utilisés</div><div class="metric-value">{total_locs}</div></div>""", unsafe_allow_html=True)
-with col_kpi3: st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Références Dormantes</div><div class="metric-value">{nb_refs_dormantes}</div></div>""", unsafe_allow_html=True)
-with col_kpi4: st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Emplacements avec Dormants</div><div class="metric-value">{nb_locs_dormants}</div></div>""", unsafe_allow_html=True)
+with col_kpi1: 
+    st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
+with col_kpi2: 
+    st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Références Dormantes</div><div class="metric-value">{nb_refs_dormantes}</div><div class="metric-subtext">({pct_refs:.1f}% du total)</div></div>""", unsafe_allow_html=True)
+with col_kpi3: 
+    st.markdown(f"""<div class="metric-card"><div class="metric-label">Emplacements Utilisés</div><div class="metric-value">{total_locs}</div></div>""", unsafe_allow_html=True)
+with col_kpi4: 
+    st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Emplacements Dormants</div><div class="metric-value">{nb_locs_dormants}</div><div class="metric-subtext">({pct_locs:.1f}% du total)</div></div>""", unsafe_allow_html=True)
 
 
 # ==========================================
 # VUES (ONGLETS)
 # ==========================================
-tab1, tab2 = st.tabs(["📊 Vue Analytique (Recherche & Pareto)", "🗺️ Vue Visuelle (Plan Interactif)"])
+tab1, tab2, tab3 = st.tabs(["📊 Vue Analytique", "🗺️ Vue Visuelle", "🚫 Dérogations & Exclusions"])
 
+# ------------------------------------------
+# ONGLET 1 : VUE ANALYTIQUE
+# ------------------------------------------
 with tab1:
-    # Ligne 1 : Les deux graphiques d'analyse 5S
     col_pareto, col_top15 = st.columns(2)
     
     with col_pareto:
-        st.markdown("**Pareto des stocks dormants par Rangée (Chantiers prioritaires)**")
-        # Préparation des données pour le Pareto
+        st.markdown("**Répartition des stocks dormants par Rangée (Chantiers prioritaires)**")
         pareto_data = df_dormants.groupby('Rangée').size().reset_index(name='Nb_Dormants')
         pareto_data = pareto_data.sort_values(by='Nb_Dormants', ascending=False)
+        
         if not pareto_data.empty:
-            pareto_data['Cumul_Pct'] = pareto_data['Nb_Dormants'].cumsum() / pareto_data['Nb_Dormants'].sum() * 100
-            
-            fig_pareto = go.Figure()
-            fig_pareto.add_trace(go.Bar(x=pareto_data['Rangée'], y=pareto_data['Nb_Dormants'], name='Occurrences', marker_color='#ff4b4b'))
-            fig_pareto.add_trace(go.Scatter(x=pareto_data['Rangée'], y=pareto_data['Cumul_Pct'], name='Cumul (%)', mode='lines+markers', yaxis='y2', marker_color='#00a8e8'))
-            
-            fig_pareto.update_layout(
-                yaxis=dict(title='Nb Occurrences dormantes'),
-                yaxis2=dict(title='Cumul (%)', overlaying='y', side='right', range=[0, 105]),
-                legend=dict(x=0.01, y=0.99),
-                margin=dict(l=0, r=0, t=20, b=0), height=350
+            # Transformation en graphique barres simple
+            fig_pareto = px.bar(
+                pareto_data, x='Rangée', y='Nb_Dormants', 
+                text_auto=True,
+                labels={'Nb_Dormants': 'Nb. Réf. Dormantes'},
+                color_discrete_sequence=["#ff4b4b"]
             )
+            fig_pareto.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
             st.plotly_chart(fig_pareto, use_container_width=True)
         else:
             st.success("Aucun stock dormant détecté !")
@@ -164,13 +159,18 @@ with tab1:
         top_loc = df_dormants.groupby('LOCATOR').size().reset_index(name='Nb_Dormants')
         top_loc = top_loc.sort_values(by='Nb_Dormants', ascending=False).head(15)
         if not top_loc.empty:
-            fig = px.bar(top_loc, x='LOCATOR', y='Nb_Dormants', color_discrete_sequence=["#ff4b4b"])
+            fig = px.bar(
+                top_loc, x='LOCATOR', y='Nb_Dormants',
+                text_auto=True,
+                labels={'Nb_Dormants': 'Nb. Réf. Dormantes'},
+                color_discrete_sequence=["#ff4b4b"]
+            )
             fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
             st.plotly_chart(fig, use_container_width=True)
             
     st.divider()
     
-    # Ligne 2 : Base de données et Recherche
+    st.markdown("**Base de données & Recherche**")
     col_search1, col_search2 = st.columns(2)
     with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
     with col_search2: search_loc = st.text_input("📍 Rechercher un Emplacement (LOCATOR) :", "")
@@ -182,18 +182,29 @@ with tab1:
     st.dataframe(df_tab1[['PART', 'LOCATOR', 'Last consumption']], height=300, use_container_width=True)
 
 
+# ------------------------------------------
+# ONGLET 2 : VUE VISUELLE
+# ------------------------------------------
 with tab2:
-    st.subheader("Plan Interactif du Magasin")
-    st.caption("Cliquez sur un numéro de meuble pour voir son détail. (🔴 Rouge = Présence de stocks dormants | 🔵 Bleu = Actif | ⚪ Gris = Vide/Inexistant)")
+    st.markdown("### Plan Interactif du Magasin")
     
-    # 1. Construction de la carte interactive
+    # Légende esthétique
+    st.markdown("""
+    <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #262730; border-radius: 8px;'>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b> (Présent dans le meuble)</div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #2b2b2b; border: 1px dashed #555; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Construction de la carte interactive
     header_cols = st.columns([1] + [1]*21, gap="small")
     for i in range(1, 22):
-        header_cols[i].markdown(f"<div style='text-align:center; font-size:12px; color:#aaa; margin-bottom:5px;'>{i:02d}</div>", unsafe_allow_html=True)
+        header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
         
     for r in list_rangees:
         cols = st.columns([1] + [1]*21, gap="small")
-        cols[0].markdown(f"<div style='text-align:center; font-weight:bold; margin-top:5px;'>{r}</div>", unsafe_allow_html=True)
+        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#fff;'>{r}</div>", unsafe_allow_html=True)
         
         for i, m in enumerate(list_meubles_all):
             df_m = df[(df['Rangée'] == r) & (df['Meuble'] == m)]
@@ -201,7 +212,6 @@ with tab2:
             if df_m.empty:
                 cols[i+1].button(m, key=f"btn_{r}_{m}_empty", disabled=True)
             else:
-                # Appliquer la logique d'exclusion sur l'affichage visuel
                 df_m_dormants = df_m[(df_m['Last consumption'] > seuil_dormant) & (~df_m['PART'].isin(list_exclus))]
                 has_dormant = not df_m_dormants.empty
                 
@@ -212,7 +222,7 @@ with tab2:
 
     st.divider()
 
-    # 2. Affichage du détail du meuble sélectionné
+    # Affichage du détail du meuble sélectionné
     r_sel = st.session_state.sel_rangee
     m_sel = st.session_state.sel_meuble
     
@@ -223,7 +233,7 @@ with tab2:
     niveaux = ['050', '040', '030', '020', '010', '000']
     colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
     
-    html_grid = "<table class='meuble-grid'><tr><th>NIVEAU / EMPLACEMENT</th>"
+    html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
     for col in colonnes: html_grid += f"<th>{col}</th>"
     html_grid += "</tr>"
     
@@ -232,13 +242,11 @@ with tab2:
         for col in colonnes:
             items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
             if items.empty:
-                html_grid += "<td class='cell-vide'>Vide</td>"
+                html_grid += "<td class='cell-vide'>-</td>"
             else:
-                # CORRECTION DU BUG ICI : Conversion explicite en String pour la jointure
                 parts = items['PART'].dropna().unique()
                 parts_str = "<br>".join([str(p) for p in parts])
                 
-                # Vérification de dormance (hors exclusions)
                 items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
                 is_dormant = not items_dormants.empty
                 
@@ -250,3 +258,39 @@ with tab2:
         
     html_grid += "</table>"
     st.markdown(html_grid, unsafe_allow_html=True)
+
+# ------------------------------------------
+# ONGLET 3 : EXCLUSIONS (DÉROGATIONS)
+# ------------------------------------------
+with tab3:
+    st.markdown("### 🚫 Registre des dérogations")
+    st.info("Les références ajoutées dans cette liste seront totalement exclues du calcul des stocks dormants et n'apparaîtront plus en rouge sur la cartographie du magasin.")
+    
+    # Formulaire d'ajout horizontal
+    with st.form("form_exclusion", clear_on_submit=True):
+        col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
+        with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
+        with col_form2: new_comm = st.text_input("Motif / Justification :")
+        with col_form3: 
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_excl = st.form_submit_button("➕ Ajouter")
+            
+        if submit_excl and new_excl:
+            st.session_state.exclusions[new_excl] = new_comm
+            st.rerun()
+
+    st.divider()
+
+    # Affichage de la liste sous forme de tableau propre
+    if st.session_state.exclusions:
+        st.markdown("**Liste des exclusions actives :**")
+        for excl, comm in list(st.session_state.exclusions.items()):
+            col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
+            with col_list1: st.markdown(f"**{excl}**")
+            with col_list2: st.markdown(f"*{comm}*")
+            with col_list3:
+                if st.button("❌ Retirer", key=f"del_{excl}"):
+                    del st.session_state.exclusions[excl]
+                    st.rerun()
+    else:
+        st.success("Aucune exclusion active pour le moment.")
