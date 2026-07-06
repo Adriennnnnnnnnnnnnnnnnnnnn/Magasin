@@ -45,7 +45,6 @@ st.markdown("""
 def filter_locators(loc):
     if pd.isna(loc): return False
     loc = str(loc)
-    # Mise à jour du filtre pour inclure les meubles de 01 à 25
     match = re.match(r'^([A-M])(0[1-9]|1[0-9]|2[0-5])', loc)
     return bool(match)
 
@@ -85,34 +84,50 @@ def load_and_clean_data(file_source):
 # ==========================================
 # PANNEAU LATÉRAL (GESTION DU FICHIER ET PARAMÈTRES)
 # ==========================================
-st.sidebar.header("📂 Gestion du fichier")
-
-# Bouton pour uploader un nouveau document
-uploaded_file = st.sidebar.file_uploader("Mettre à jour les stocks (Excel) :", type=["xlsx"])
+st.sidebar.header("📂 Gestion des données")
 
 file_path_default = "Rangement magasin.xlsx"
 
-# Logique de sélection du fichier (Upload ou Défaut)
+# 1. Bouton d'Upload
+uploaded_file = st.sidebar.file_uploader("Mettre à jour avec un nouveau fichier :", type=["xlsx"])
+
+# Logique de sélection et préparation du fichier pour le téléchargement
 if uploaded_file is not None:
     file_to_load = uploaded_file
     mod_time = "À l'instant (Fichier importé)"
+    file_data_to_download = uploaded_file.getvalue()
+    download_name = uploaded_file.name
 else:
     file_to_load = file_path_default
     if os.path.exists(file_path_default):
         mod_time = datetime.fromtimestamp(os.path.getmtime(file_path_default)).strftime('%d/%m/%Y à %H:%M')
+        with open(file_path_default, "rb") as f:
+            file_data_to_download = f.read()
     else:
         mod_time = "Fichier par défaut introuvable"
+        file_data_to_download = b""
+    download_name = "Base_Rangement_Magasin.xlsx"
 
-st.sidebar.info(f"📅 **Date des données :**\n\n{mod_time}")
+st.sidebar.info(f"📅 **Date des données actives :**\n\n{mod_time}")
 
-st.sidebar.header("⚙️ Paramètres")
+# 2. Bouton de Download
+if file_data_to_download:
+    st.sidebar.download_button(
+        label="📥 Télécharger la base actuelle",
+        data=file_data_to_download,
+        file_name=download_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+st.sidebar.divider()
+st.sidebar.header("⚙️ Paramètres d'analyse")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
-# Chargement des données via la fonction
+# Chargement des données
 df = load_and_clean_data(file_to_load)
 
 list_rangees = sorted(df['Rangée'].dropna().unique())
-# Mise à jour pour inclure les 25 meubles
 list_meubles_all = [f"{i:02d}" for i in range(1, 26)]
 CAPACITE_MAX_MAGASIN = len(list_rangees) * len(list_meubles_all) * 6 * 6
 
@@ -214,7 +229,6 @@ with tab1:
     if search_part: df_tab1 = df_tab1[df_tab1['PART'].astype(str).str.contains(search_part, case=False, na=False)]
     if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
     
-    # Formatage des colonnes : Suppression du Prix Unitaire et Renommage de Last consumption
     df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
     df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
     st.dataframe(df_display, height=350, use_container_width=True)
@@ -249,11 +263,9 @@ with tab2:
                 'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}
             }
         ))
-        # Ajustement des marges hautes (t=60) pour ne pas couper le titre "Occupation"
         fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200)
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    # Affichage de 25 colonnes au lieu de 21
     header_cols = st.columns([1] + [1]*25, gap="small")
     for i in range(1, 26):
         header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
