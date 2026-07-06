@@ -1,92 +1,193 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import re
 
-# Configuration de la page
+# Configuration de la page (mode large)
 st.set_page_config(page_title="Vue d'Ensemble Magasin", page_icon="📦", layout="wide")
 
-st.title("📦 Tableau de Bord : Gestion et Rangement du Magasin")
-st.markdown("Application interactive pour le suivi des stocks et l'optimisation des emplacements (démarche 5S).")
+# --- STYLE CSS PERSONNALISÉ ---
+# On injecte du CSS pour imiter le style "Dashboard moderne" de ta photo
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: #2b2b2b;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+        border-left: 5px solid #00a8e8;
+        margin-bottom: 20px;
+    }
+    .metric-value {
+        font-size: 28px;
+        font-weight: bold;
+        color: white;
+    }
+    .metric-label {
+        font-size: 14px;
+        color: #aaaaaa;
+    }
+    .status-dot {
+        height: 12px;
+        width: 12px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+    }
+    .status-red { background-color: #ff4b4b; }
+    .status-green { background-color: #00cc96; }
+    .status-gray { background-color: #888888; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- FONCTIONS DE TRAITEMENT ---
+def filter_locators(loc):
+    """
+    Filtre les emplacements pour ne garder que ceux de A01 à M21.
+    Exclut tout le reste (MP, W06, etc.)
+    """
+    if pd.isna(loc):
+        return False
+    loc = str(loc)
+    
+    # Recherche un motif du type Lettre (A-M) suivie de deux chiffres
+    match = re.match(r'^([A-M])(\d{2})', loc)
+    if match:
+        letter = match.group(1)
+        number = int(match.group(2))
+        
+        # Si la lettre est M, le numéro ne doit pas dépasser 21
+        if letter == 'M' and number > 21:
+            return False
+        return True
+    return False
 
 @st.cache_data
-def load_data():
-    # Chargement de la feuille 'Bilan'
+def load_and_clean_data():
+    # Chargement
     df = pd.read_excel("Rangement magasin.xlsx", sheet_name="Bilan")
     
-    # Nettoyage : conversion de 'Last consumption' en numérique (les valeurs 'Abs' deviennent des NaN)
+    # Conversion des jours (les 'Abs' ou erreurs deviennent NaN)
     df['Last consumption'] = pd.to_numeric(df['Last consumption'], errors='coerce')
     
-    # Suppression des doublons potentiels
+    # Nettoyage des doublons
     df = df.drop_duplicates()
+    
+    # Application du filtre strict sur les emplacements (A01 -> M21)
+    df = df[df['LOCATOR'].apply(filter_locators)]
+    
     return df
 
-df = load_data()
+# Chargement des données
+df = load_and_clean_data()
 
-# --- KPIs ---
-st.header("📊 Indicateurs Clés de Performance")
-col1, col2, col3, col4 = st.columns(4)
+# --- INTERFACE UTILISATEUR ---
+st.title("📦 Vue d'Ensemble Magasin")
 
-total_refs = df['PART'].nunique()
-total_locs = df['LOCATOR'].nunique()
+# --- FILTRES (Sidebar) ---
+st.sidebar.header("⚙️ Paramètres")
 
-# Définition d'un stock dormant (ex: plus de 365 jours sans consommation)
-seuil_dormant = 365
-stocks_dormants = df[df['Last consumption'] > seuil_dormant]
-nb_dormants = stocks_dormants['PART'].nunique()
-
-# Comptage des références sans date de consommation (anciennes valeurs 'Abs')
-nb_nan = df['Last consumption'].isna().sum()
-
-col1.metric("Références Uniques", total_refs)
-col2.metric("Emplacements Occupés", total_locs)
-col3.metric(f"Stocks Dormants (> {seuil_dormant}j)", nb_dormants)
-col4.metric("Consommation Inconnue", nb_nan)
-
-st.divider()
-
-# --- Panneau latéral (Filtres) ---
-st.sidebar.header("⚙️ Filtres d'Analyse")
-selected_loc = st.sidebar.multiselect(
-    "Filtrer par emplacement :", 
-    options=sorted(df['LOCATOR'].dropna().astype(str).unique())
+# Filtre interactif pour définir le seuil de stock dormant
+seuil_dormant = st.sidebar.slider(
+    "Définir le seuil 'Stock Dormant' (jours) :", 
+    min_value=30, 
+    max_value=3000, 
+    value=365, 
+    step=30,
+    help="Modifiez cette valeur pour voir en rouge les références qui n'ont pas été consommées depuis X jours."
 )
 
-if selected_loc:
-    df_filtered = df[df['LOCATOR'].isin(selected_loc)]
+st.sidebar.markdown("---")
+
+# Filtre par emplacement (dynamique basé sur les données filtrées)
+all_locators = sorted(df['LOCATOR'].dropna().astype(str).unique())
+selected_locs = st.sidebar.multiselect(
+    "Filtrer par Emplacement(s) :", 
+    options=all_locators,
+    placeholder="Ex: A01A010"
+)
+
+# Application du filtre de sélection
+if selected_locs:
+    df_display = df[df['LOCATOR'].isin(selected_locs)].copy()
 else:
-    df_filtered = df
+    df_display = df.copy()
 
-# --- Visualisations ---
-col_chart1, col_chart2 = st.columns(2)
+# --- CALCUL DES KPIs ---
+total_refs = df_display['PART'].nunique()
+stocks_dormants = df_display[df_display['Last consumption'] > seuil_dormant]
+nb_dormants = stocks_dormants['PART'].nunique()
+nb_inconnus = df_display['Last consumption'].isna().sum()
 
-with col_chart1:
-    st.subheader("Répartition de l'ancienneté des consommations")
-    fig1 = px.histogram(
-        df_filtered, 
-        x="Last consumption", 
-        nbins=40, 
-        title="Jours écoulés depuis la dernière consommation",
-        labels={"Last consumption": "Jours", "count": "Fréquence d'apparition"},
-        color_discrete_sequence=["#1f77b4"]
-    )
-    st.plotly_chart(fig1, use_container_width=True)
+# Affichage des KPIs façon cartes personnalisées
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">Références Totales affichées</div>
+        <div class="metric-value">{total_refs}</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col2:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #ff4b4b;">
+        <div class="metric-label">Stocks Dormants (> {seuil_dormant}j)</div>
+        <div class="metric-value">{nb_dormants}</div>
+    </div>
+    """, unsafe_allow_html=True)
+with col3:
+    st.markdown(f"""
+    <div class="metric-card" style="border-left-color: #888888;">
+        <div class="metric-label">Consommation Inconnue (Abs)</div>
+        <div class="metric-value">{nb_inconnus}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-with col_chart2:
-    st.subheader("Top 10 des emplacements avec stocks dormants")
-    # Regrouper les stocks dormants par emplacement
-    dormants_par_loc = stocks_dormants.groupby('LOCATOR').size().reset_index(name='Nombre de références')
-    dormants_par_loc = dormants_par_loc.sort_values(by='Nombre de références', ascending=False).head(10)
-    
-    fig2 = px.bar(
-        dormants_par_loc, 
-        x='LOCATOR', 
-        y='Nombre de références',
-        title="Cibles prioritaires pour le tri",
-        labels={"LOCATOR": "Emplacement", "Nombre de références": "Nb. de références dormantes"},
-        color_discrete_sequence=["#d62728"]
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+st.markdown("### Détail des Emplacements")
 
-# --- Données Brutes ---
-st.subheader("📋 Base de Données Détaillée")
-st.dataframe(df_filtered, use_container_width=True)
+# --- FORMATAGE DU TABLEAU STYLE "DASHBOARD" ---
+# On crée une nouvelle colonne pour le statut visuel
+def get_status_html(days):
+    if pd.isna(days):
+        return '<span class="status-dot status-gray" title="Inconnu"></span> Inconnu'
+    elif days > seuil_dormant:
+        return f'<span class="status-dot status-red" title="Dormant"></span> {int(days)} jours'
+    else:
+        return f'<span class="status-dot status-green" title="Actif"></span> {int(days)} jours'
+
+df_display['Statut (Dernière Cons.)'] = df_display['Last consumption'].apply(get_status_html)
+
+# On réorganise et renomme pour l'affichage
+df_final = df_display[['PART', 'LOCATOR', 'Statut (Dernière Cons.)']].rename(columns={
+    'PART': 'Référence (Part)',
+    'LOCATOR': 'Emplacement'
+})
+
+# Affichage du tableau en HTML pour permettre l'interprétation des pastilles de couleur
+st.write(
+    df_final.to_html(escape=False, index=False, classes="dataframe", border=0), 
+    unsafe_allow_html=True
+)
+
+# Petit ajustement CSS pour le tableau HTML natif de Pandas dans Streamlit
+st.markdown("""
+<style>
+    table.dataframe {
+        width: 100%;
+        color: white;
+        text-align: left;
+        border-collapse: collapse;
+    }
+    table.dataframe th {
+        background-color: #1e1e1e;
+        padding: 12px;
+        border-bottom: 2px solid #333;
+    }
+    table.dataframe td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #333;
+    }
+    table.dataframe tr:hover {
+        background-color: #2b2b2b;
+    }
+</style>
+""", unsafe_allow_html=True)
