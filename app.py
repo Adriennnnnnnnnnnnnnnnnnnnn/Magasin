@@ -45,12 +45,13 @@ st.markdown("""
 def filter_locators(loc):
     if pd.isna(loc): return False
     loc = str(loc)
-    match = re.match(r'^([A-M])(0[1-9]|1[0-9]|2[0-1])', loc)
+    # Mise à jour du filtre pour inclure les meubles de 01 à 25
+    match = re.match(r'^([A-M])(0[1-9]|1[0-9]|2[0-5])', loc)
     return bool(match)
 
 @st.cache_data
-def load_and_clean_data():
-    df = pd.read_excel("Rangement magasin.xlsx", sheet_name="Bilan", engine="openpyxl")
+def load_and_clean_data(file_source):
+    df = pd.read_excel(file_source, sheet_name="Bilan", engine="openpyxl")
     
     nom_colonne_prix = "Unit Price €" 
     nom_colonne_qte = "Current Stock Qty"       
@@ -81,29 +82,42 @@ def load_and_clean_data():
     
     return df
 
-df = load_and_clean_data()
+# ==========================================
+# PANNEAU LATÉRAL (GESTION DU FICHIER ET PARAMÈTRES)
+# ==========================================
+st.sidebar.header("📂 Gestion du fichier")
+
+# Bouton pour uploader un nouveau document
+uploaded_file = st.sidebar.file_uploader("Mettre à jour les stocks (Excel) :", type=["xlsx"])
+
+file_path_default = "Rangement magasin.xlsx"
+
+# Logique de sélection du fichier (Upload ou Défaut)
+if uploaded_file is not None:
+    file_to_load = uploaded_file
+    mod_time = "À l'instant (Fichier importé)"
+else:
+    file_to_load = file_path_default
+    if os.path.exists(file_path_default):
+        mod_time = datetime.fromtimestamp(os.path.getmtime(file_path_default)).strftime('%d/%m/%Y à %H:%M')
+    else:
+        mod_time = "Fichier par défaut introuvable"
+
+st.sidebar.info(f"📅 **Date des données :**\n\n{mod_time}")
+
+st.sidebar.header("⚙️ Paramètres")
+seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
+
+# Chargement des données via la fonction
+df = load_and_clean_data(file_to_load)
 
 list_rangees = sorted(df['Rangée'].dropna().unique())
-list_meubles_all = [f"{i:02d}" for i in range(1, 22)]
+# Mise à jour pour inclure les 25 meubles
+list_meubles_all = [f"{i:02d}" for i in range(1, 26)]
 CAPACITE_MAX_MAGASIN = len(list_rangees) * len(list_meubles_all) * 6 * 6
 
 if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = list_rangees[0] if list_rangees else 'A'
 if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
-
-# ==========================================
-# PANNEAU LATÉRAL
-# ==========================================
-# Récupération de la date de modification du fichier
-file_path = "Rangement magasin.xlsx"
-if os.path.exists(file_path):
-    mod_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y à %H:%M')
-else:
-    mod_time = "Inconnue"
-
-st.sidebar.info(f"📅 **Mise à jour du fichier :**\n\n{mod_time}")
-
-st.sidebar.header("⚙️ Paramètres")
-seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
 # ==========================================
 # EN-TÊTE ET KPIs
@@ -191,7 +205,6 @@ with tab1:
             
     st.divider()
     
-    # RE-AJOUT DU TABLEAU DE RECHERCHE
     st.markdown("### 🔎 Base de données & Recherche")
     col_search1, col_search2 = st.columns(2)
     with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
@@ -201,9 +214,9 @@ with tab1:
     if search_part: df_tab1 = df_tab1[df_tab1['PART'].astype(str).str.contains(search_part, case=False, na=False)]
     if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
     
-    # Affichage du tableau avec les colonnes utiles formatées
-    df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Prix Unitaire', 'Valeur Totale']].copy()
-    df_display = df_display.rename(columns={'Last consumption': 'Ancienneté (jours)'})
+    # Formatage des colonnes : Suppression du Prix Unitaire et Renommage de Last consumption
+    df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
+    df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
     st.dataframe(df_display, height=350, use_container_width=True)
 
 
@@ -236,16 +249,17 @@ with tab2:
                 'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}
             }
         ))
-        # CORRECTION : Augmentation de la marge droite (r=60) et de la hauteur pour ne plus couper le chiffre
-        fig_gauge.update_layout(margin=dict(l=10, r=60, t=30, b=10), height=180)
+        # Ajustement des marges hautes (t=60) pour ne pas couper le titre "Occupation"
+        fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200)
         st.plotly_chart(fig_gauge, use_container_width=True)
 
-    header_cols = st.columns([1] + [1]*21, gap="small")
-    for i in range(1, 22):
+    # Affichage de 25 colonnes au lieu de 21
+    header_cols = st.columns([1] + [1]*25, gap="small")
+    for i in range(1, 26):
         header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
         
     for r in list_rangees:
-        cols = st.columns([1] + [1]*21, gap="small")
+        cols = st.columns([1] + [1]*25, gap="small")
         cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
         
         for i, m in enumerate(list_meubles_all):
