@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import re
+import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -49,19 +50,16 @@ def filter_locators(loc):
 
 @st.cache_data
 def load_and_clean_data():
-    # Lecture du fichier (nom mis à jour)
     df = pd.read_excel("Rangement magasin.xlsx", sheet_name="Bilan", engine="openpyxl")
     
-    # --- NOMS EXACTS DES COLONNES SELON LE FICHIER ---
     nom_colonne_prix = "Unit Price €" 
     nom_colonne_qte = "Current Stock Qty"       
     
-    # Vérification anti-plantage
     if nom_colonne_prix not in df.columns or nom_colonne_qte not in df.columns:
         st.error("🚨 **Erreur de lecture des colonnes financières**")
         st.warning(f"Impossible de trouver '{nom_colonne_prix}' ou '{nom_colonne_qte}'.")
         st.info(f"👉 **Colonnes détectées dans le fichier :** {', '.join(df.columns)}")
-        st.stop() # Arrête l'exécution proprement
+        st.stop()
         
     df['Last consumption'] = pd.to_numeric(df['Last consumption'], errors='coerce')
     df = df.dropna(subset=['Last consumption'])
@@ -73,16 +71,12 @@ def load_and_clean_data():
     df['Colonne'] = df['LOCATOR'].str[3:4]
     df['Niveau'] = df['LOCATOR'].str[4:7]
         
-    # Nettoyage et conversion des prix (gestion des virgules et espaces)
     df['Prix Unitaire'] = pd.to_numeric(
         df[nom_colonne_prix].astype(str).str.replace(',', '.').str.replace('€', '').str.replace(' ', ''), 
         errors='coerce'
     ).fillna(0)
     
-    # Conversion de la quantité en nombre
     df['Quantité'] = pd.to_numeric(df[nom_colonne_qte], errors='coerce').fillna(0)
-    
-    # Calcul de la valeur du stock par ligne
     df['Valeur Totale'] = df['Quantité'] * df['Prix Unitaire']
     
     return df
@@ -97,8 +91,17 @@ if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = list_rang
 if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
 
 # ==========================================
-# PARAMÈTRES (PANNEAU LATÉRAL)
+# PANNEAU LATÉRAL
 # ==========================================
+# Récupération de la date de modification du fichier
+file_path = "Rangement magasin.xlsx"
+if os.path.exists(file_path):
+    mod_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y à %H:%M')
+else:
+    mod_time = "Inconnue"
+
+st.sidebar.info(f"📅 **Mise à jour du fichier :**\n\n{mod_time}")
+
 st.sidebar.header("⚙️ Paramètres")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
@@ -185,6 +188,23 @@ with tab1:
             fig = px.bar(top_loc, x='LOCATOR', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"])
             fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
             st.plotly_chart(fig, use_container_width=True)
+            
+    st.divider()
+    
+    # RE-AJOUT DU TABLEAU DE RECHERCHE
+    st.markdown("### 🔎 Base de données & Recherche")
+    col_search1, col_search2 = st.columns(2)
+    with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
+    with col_search2: search_loc = st.text_input("📍 Rechercher un Emplacement (LOCATOR) :", "")
+        
+    df_tab1 = df.copy()
+    if search_part: df_tab1 = df_tab1[df_tab1['PART'].astype(str).str.contains(search_part, case=False, na=False)]
+    if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
+    
+    # Affichage du tableau avec les colonnes utiles formatées
+    df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Prix Unitaire', 'Valeur Totale']].copy()
+    df_display = df_display.rename(columns={'Last consumption': 'Ancienneté (jours)'})
+    st.dataframe(df_display, height=350, use_container_width=True)
 
 
 # ------------------------------------------
@@ -216,7 +236,8 @@ with tab2:
                 'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}
             }
         ))
-        fig_gauge.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=150)
+        # CORRECTION : Augmentation de la marge droite (r=60) et de la hauteur pour ne plus couper le chiffre
+        fig_gauge.update_layout(margin=dict(l=10, r=60, t=30, b=10), height=180)
         st.plotly_chart(fig_gauge, use_container_width=True)
 
     header_cols = st.columns([1] + [1]*21, gap="small")
