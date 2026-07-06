@@ -50,7 +50,7 @@ def filter_locators(loc):
 @st.cache_data
 def load_and_clean_data():
     # Lecture du nouveau fichier
-    df = pd.read_excel("Rangement magasin_2.xlsx", sheet_name="Bilan")
+    df = pd.read_excel("Rangement magasin.xlsx", sheet_name="Bilan")
     
     df['Last consumption'] = pd.to_numeric(df['Last consumption'], errors='coerce')
     df = df.dropna(subset=['Last consumption'])
