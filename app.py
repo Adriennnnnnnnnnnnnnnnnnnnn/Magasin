@@ -13,7 +13,7 @@ if 'exclusions' not in st.session_state:
 # --- STYLE CSS PERSONNALISÉ ---
 st.markdown("""
 <style>
-    /* Cartes de KPIs */
+    /* Cartes de KPIs (Inchangées) */
     .metric-card {
         background-color: #262730; border-radius: 10px; padding: 20px 15px;
         text-align: center; border-left: 5px solid #00a8e8; margin-bottom: 20px;
@@ -24,16 +24,16 @@ st.markdown("""
     .metric-label { font-size: 15px; color: #cccccc; text-transform: uppercase; letter-spacing: 0.5px; }
     .metric-subtext { font-size: 13px; color: #ff8a8a; margin-top: 5px; font-weight: bold; }
     
-    /* Style Matrice Détail Meuble */
+    /* Style Matrice Détail Meuble - ADAPTÉ POUR FOND CLAIR */
     table.meuble-grid {
         width: 100%; border-collapse: separate; border-spacing: 2px; text-align: center; color: #333; font-size: 12px; margin-top: 10px;
     }
-    table.meuble-grid th { background-color: #1e1e1e; color: #eee; padding: 12px; border-radius: 4px; border: none; }
-    table.meuble-grid td { padding: 12px; width: 14%; vertical-align: middle; font-weight: bold; border-radius: 4px; border: none; }
-    .cell-vide { background-color: #3a3b45; color: #888; }
+    table.meuble-grid th { background-color: #f0f2f6; color: #31333F; padding: 12px; border-radius: 4px; border: none; }
+    table.meuble-grid td { padding: 12px; width: 14%; vertical-align: middle; font-weight: bold; border-radius: 4px; border: 1px solid #f0f2f6; }
+    .cell-vide { background-color: #ffffff; color: #aaa; border: 1px dashed #eee; }
     .cell-actif { background-color: #00a8e8; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
     .cell-dormant { background-color: #ff4b4b; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.2); }
-    .cell-niveau { background-color: #262730; color: #ccc; font-weight: bold; }
+    .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; }
 
     /* Esthétique améliorée pour les boutons de la grille interactive */
     button[kind="primary"] {
@@ -50,8 +50,9 @@ st.markdown("""
     }
     button[kind="secondary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(0, 168, 232, 0.5) !important; }
     
+    /* Boutons désactivés (Emplacements vides) - PASSÉS EN BLANC */
     button:disabled {
-        background-color: #2b2b2b !important; color: #555 !important; border: 1px dashed #444 !important; box-shadow: none !important;
+        background-color: #ffffff !important; color: #aaa !important; border: 1px dashed #ccc !important; box-shadow: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -113,7 +114,7 @@ nb_locs_dormants = df_dormants['LOCATOR'].nunique()
 pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
 pct_locs = (nb_locs_dormants / total_locs * 100) if total_locs > 0 else 0
 
-# Nouvel ordre : Total Refs -> Dormants Refs -> Total Locs -> Dormants Locs
+# Ordre : Total Refs -> Dormants Refs -> Total Locs -> Dormants Locs
 col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
 with col_kpi1: 
     st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
@@ -142,7 +143,6 @@ with tab1:
         pareto_data = pareto_data.sort_values(by='Nb_Dormants', ascending=False)
         
         if not pareto_data.empty:
-            # Transformation en graphique barres simple
             fig_pareto = px.bar(
                 pareto_data, x='Rangée', y='Nb_Dormants', 
                 text_auto=True,
@@ -188,12 +188,12 @@ with tab1:
 with tab2:
     st.markdown("### Plan Interactif du Magasin")
     
-    # Légende esthétique
+    # Légende esthétique passée en thème clair
     st.markdown("""
-    <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #262730; border-radius: 8px;'>
+    <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
         <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b> (Présent dans le meuble)</div>
         <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #2b2b2b; border: 1px dashed #555; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #aaa; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -204,7 +204,8 @@ with tab2:
         
     for r in list_rangees:
         cols = st.columns([1] + [1]*21, gap="small")
-        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#fff;'>{r}</div>", unsafe_allow_html=True)
+        # Les lettres des rangées sont désormais en gris foncé (#31333F) pour être visibles sur fond blanc
+        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
         
         for i, m in enumerate(list_meubles_all):
             df_m = df[(df['Rangée'] == r) & (df['Meuble'] == m)]
@@ -266,7 +267,6 @@ with tab3:
     st.markdown("### 🚫 Registre des dérogations")
     st.info("Les références ajoutées dans cette liste seront totalement exclues du calcul des stocks dormants et n'apparaîtront plus en rouge sur la cartographie du magasin.")
     
-    # Formulaire d'ajout horizontal
     with st.form("form_exclusion", clear_on_submit=True):
         col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
         with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
@@ -281,7 +281,6 @@ with tab3:
 
     st.divider()
 
-    # Affichage de la liste sous forme de tableau propre
     if st.session_state.exclusions:
         st.markdown("**Liste des exclusions actives :**")
         for excl, comm in list(st.session_state.exclusions.items()):
