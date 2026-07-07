@@ -41,82 +41,97 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTIONS DE TRAITEMENT ---
-def filter_locators(loc):
-    if pd.isna(loc): return False
-    loc = str(loc)
-    match = re.match(r'^([A-M])(0[1-9]|1[0-9]|2[0-5])', loc)
-    return bool(match)
+# --- FONCTION DE TRAITEMENT ---
+def parse_file(file):
+    """Lecture souple CSV ou Excel"""
+    if file.name.endswith('.csv'):
+        content = file.getvalue().decode('utf-8', errors='ignore')
+        delimiter = ';' if ';' in content.split('\n')[0] else ','
+        file.seek(0)
+        return pd.read_csv(file, sep=delimiter, encoding='utf-8', on_bad_lines='skip')
+    else:
+        return pd.read_excel(file, engine='openpyxl')
 
 @st.cache_data
 def load_and_clean_data(file_source):
-    df = pd.read_excel(file_source, sheet_name="Bilan", engine="openpyxl")
+    if isinstance(file_source, str):
+        if file_source.endswith('.csv'):
+            df = pd.read_csv(file_source, sep=None, engine='python')
+        else:
+            df = pd.read_excel(file_source, engine="openpyxl")
+    else:
+        df = parse_file(file_source)
     
     nom_colonne_prix = "Unit Price €" 
-    nom_colonne_qte = "Current Stock Qty"       
+    nom_colonne_qte = "Current Stock Qty"
+    nom_colonne_jours = "Last consumption"
     
-    if nom_colonne_prix not in df.columns or nom_colonne_qte not in df.columns:
-        st.error("🚨 **Erreur de lecture des colonnes financières**")
-        st.warning(f"Impossible de trouver '{nom_colonne_prix}' ou '{nom_colonne_qte}'.")
+    if nom_colonne_prix not in df.columns or nom_colonne_qte not in df.columns or nom_colonne_jours not in df.columns:
+        st.error("🚨 **Erreur de lecture des colonnes**")
         st.info(f"👉 **Colonnes détectées dans le fichier :** {', '.join(df.columns)}")
         st.stop()
         
-    df['Last consumption'] = pd.to_numeric(df['Last consumption'], errors='coerce')
-    df = df.dropna(subset=['Last consumption'])
+    df[nom_colonne_jours] = pd.to_numeric(df[nom_colonne_jours], errors='coerce')
+    df = df.dropna(subset=[nom_colonne_jours])
     df = df.drop_duplicates()
-    df = df[df['LOCATOR'].apply(filter_locators)]
     
-    df['Rangée'] = df['LOCATOR'].str[0]
-    df['Meuble'] = df['LOCATOR'].str[1:3]
-    df['Colonne'] = df['LOCATOR'].str[3:4]
-    df['Niveau'] = df['LOCATOR'].str[4:7]
+    # Plus de filtre strict ! On extrait juste intelligemment pour le plan 2D.
+    # Pattern cible: Lettre + 2 Chiffres + Lettre + Chiffres (ex: A01A010)
+    pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
+    extracted = df['LOCATOR'].astype(str).str.extract(pattern)
+    df['Rangée'] = extracted[0].str.upper()
+    df['Meuble'] = extracted[1]
+    df['Colonne'] = extracted[2].str.upper()
+    df['Niveau'] = extracted[3]
         
-    df['Prix Unitaire'] = pd.to_numeric(
-        df[nom_colonne_prix].astype(str).str.replace(',', '.').str.replace('€', '').str.replace(' ', ''), 
-        errors='coerce'
-    ).fillna(0)
-    
+    df['Prix Unitaire'] = pd.to_numeric(df[nom_colonne_prix].astype(str).str.replace(',', '.').str.replace('€', '').str.replace(' ', ''), errors='coerce').fillna(0)
     df['Quantité'] = pd.to_numeric(df[nom_colonne_qte], errors='coerce').fillna(0)
     df['Valeur Totale'] = df['Quantité'] * df['Prix Unitaire']
     
     return df
 
 # ==========================================
-# PANNEAU LATÉRAL (GESTION DU FICHIER ET PARAMÈTRES)
+# PANNEAU LATÉRAL (GESTION DU FICHIER)
 # ==========================================
 st.sidebar.header("📂 Gestion des données")
 
-file_path_default = "Rangement magasin.xlsx"
+uploaded_file = st.sidebar.file_uploader("Importer le fichier DATA STOCK :", type=["xlsx", "csv"])
 
-# 1. Bouton d'Upload
-uploaded_file = st.sidebar.file_uploader("Mettre à jour avec un nouveau fichier :", type=["xlsx"])
+# Gestion du fichier par défaut
+file_path_default = "DATA STOCK.xlsx"
+fallback_path = "DATA STOCK.xlsx - Sheet1.csv" # Pour le cloud s'il est au format CSV
 
-# Logique de sélection et préparation du fichier pour le téléchargement
 if uploaded_file is not None:
     file_to_load = uploaded_file
     mod_time = "À l'instant (Fichier importé)"
     file_data_to_download = uploaded_file.getvalue()
     download_name = uploaded_file.name
 else:
-    file_to_load = file_path_default
+    # Recherche du fichier par défaut
     if os.path.exists(file_path_default):
-        mod_time = datetime.fromtimestamp(os.path.getmtime(file_path_default)).strftime('%d/%m/%Y à %H:%M')
-        with open(file_path_default, "rb") as f:
-            file_data_to_download = f.read()
+        file_to_load = file_path_default
+    elif os.path.exists(fallback_path):
+        file_to_load = fallback_path
     else:
-        mod_time = "Fichier par défaut introuvable"
-        file_data_to_download = b""
-    download_name = "Base_Rangement_Magasin.xlsx"
+        file_to_load = None
+
+    if file_to_load:
+        mod_time = datetime.fromtimestamp(os.path.getmtime(file_to_load)).strftime('%d/%m/%Y à %H:%M')
+        with open(file_to_load, "rb") as f:
+            file_data_to_download = f.read()
+        download_name = "DATA_STOCK_Extract.xlsx"
+    else:
+        st.title("📦 Tableau de Bord : Pilotage Magasin")
+        st.info("👋 Bienvenue ! Aucun fichier trouvé.\n\nVeuillez importer votre fichier de stock (Excel ou CSV) depuis le menu de gauche.")
+        st.stop()
 
 st.sidebar.info(f"📅 **Date des données actives :**\n\n{mod_time}")
 
-# 2. Bouton de Download
-if file_data_to_download:
+if 'file_data_to_download' in locals() and file_data_to_download:
     st.sidebar.download_button(
         label="📥 Télécharger la base actuelle",
         data=file_data_to_download,
         file_name=download_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
 
@@ -124,11 +139,17 @@ st.sidebar.divider()
 st.sidebar.header("⚙️ Paramètres d'analyse")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
-# Chargement des données
+# Chargement
 df = load_and_clean_data(file_to_load)
 
+# Détermination dynamique de la taille du magasin pour la grille
 list_rangees = sorted(df['Rangée'].dropna().unique())
-list_meubles_all = [f"{i:02d}" for i in range(1, 26)]
+if df['Meuble'].dropna().empty:
+    max_rack = 25
+else:
+    max_rack = max(25, int(df['Meuble'].dropna().astype(int).max()))
+list_meubles_all = [f"{i:02d}" for i in range(1, max_rack + 1)]
+
 CAPACITE_MAX_MAGASIN = len(list_rangees) * len(list_meubles_all) * 6 * 6
 
 if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = list_rangees[0] if list_rangees else 'A'
@@ -141,221 +162,7 @@ st.title("📦 Tableau de Bord : Pilotage Magasin")
 
 total_refs = df['PART'].nunique()
 total_locs = df['LOCATOR'].nunique()
-taux_occupation = (total_locs / CAPACITE_MAX_MAGASIN) * 100
 
-list_exclus = list(st.session_state.exclusions.keys())
-df_dormants = df[(df['Last consumption'] > seuil_dormant) & (~df['PART'].isin(list_exclus))]
-
-nb_refs_dormantes = df_dormants['PART'].nunique()
-capital_dormant = df_dormants['Valeur Totale'].sum()
-pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
-
-col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-with col_kpi1: 
-    st.markdown(f"""<div class="metric-card"><div class="metric-label">Taux d'Occupation</div><div class="metric-value">{taux_occupation:.1f}%</div><div class="metric-subtext-green">{total_locs} emplacements pris</div></div>""", unsafe_allow_html=True)
-with col_kpi2: 
-    st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
-with col_kpi3: 
-    st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Réf. Dormantes (> {seuil_dormant}j)</div><div class="metric-value">{nb_refs_dormantes}</div><div class="metric-subtext">({pct_refs:.1f}% du total)</div></div>""", unsafe_allow_html=True)
-with col_kpi4: 
-    capital_format = "{:,.0f} €".format(capital_dormant).replace(",", " ")
-    st.markdown(f"""<div class="metric-card metric-card-gold"><div class="metric-label">Capital Immobilisé</div><div class="metric-value">{capital_format}</div><div class="metric-subtext">Dans les stocks dormants</div></div>""", unsafe_allow_html=True)
-
-# ==========================================
-# VUES (ONGLETS)
-# ==========================================
-tab1, tab2, tab3 = st.tabs(["📊 Vue Analytique & 5S", "🗺️ Vue Visuelle", "🚫 Dérogations & Exclusions"])
-
-# ------------------------------------------
-# ONGLET 1 : VUE ANALYTIQUE & 5S
-# ------------------------------------------
-with tab1:
-    st.markdown("### 🛠️ Outils de terrain et Suivi")
-    col_export, col_trend = st.columns([1, 2])
-    
-    with col_export:
-        st.markdown("**Plan d'action de tri (5S)**")
-        st.write("Générez la liste des emplacements prioritaires à traiter sur le terrain pour libérer de l'espace.")
-        
-        df_export = df_dormants[['LOCATOR', 'PART', 'Quantité', 'Prix Unitaire', 'Valeur Totale', 'Last consumption']].copy()
-        df_export = df_export.rename(columns={'LOCATOR': 'Emplacement', 'PART': 'Référence', 'Last consumption': 'Jours inactifs'})
-        df_export = df_export.sort_values(by='Valeur Totale', ascending=False)
-        df_export['Action (Jeter/Déplacer/Garder)'] = ""
-        df_export['Commentaires Opérateur'] = ""
-        
-        csv_export = df_export.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
-        
-        st.download_button(label="📥 Exporter le plan d'action (CSV)", data=csv_export, file_name="Plan_Action_5S_Magasin.csv", mime="text/csv")
-
-    with col_trend:
-        st.markdown("**Évolution du capital immobilisé (Simulation 6 derniers mois)**")
-        mois_labels = [(datetime.today() - relativedelta(months=i)).strftime('%b %Y') for i in range(5, -1, -1)]
-        valeurs_historiques = [capital_dormant * (1 + (i*0.05)) for i in range(5, -1, -1)]
-        
-        df_hist = pd.DataFrame({'Mois': mois_labels, 'Capital': valeurs_historiques})
-        fig_hist = px.line(df_hist, x='Mois', y='Capital', markers=True, color_discrete_sequence=["#f1c40f"])
-        fig_hist.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=200, yaxis_title="Euros (€)")
-        st.plotly_chart(fig_hist, use_container_width=True)
-
-    st.divider()
-
-    col_pareto, col_top15 = st.columns(2)
-    with col_pareto:
-        st.markdown("**Répartition des stocks dormants par Rangée**")
-        pareto_data = df_dormants.groupby('Rangée').size().reset_index(name='Nb_Dormants')
-        pareto_data = pareto_data.sort_values(by='Nb_Dormants', ascending=False)
-        if not pareto_data.empty:
-            fig_pareto = px.bar(pareto_data, x='Rangée', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"])
-            fig_pareto.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
-            st.plotly_chart(fig_pareto, use_container_width=True)
-            
-    with col_top15:
-        st.markdown("**Top 15 des emplacements avec le plus de dormants**")
-        top_loc = df_dormants.groupby('LOCATOR').size().reset_index(name='Nb_Dormants')
-        top_loc = top_loc.sort_values(by='Nb_Dormants', ascending=False).head(15)
-        if not top_loc.empty:
-            fig = px.bar(top_loc, x='LOCATOR', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"])
-            fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
-            st.plotly_chart(fig, use_container_width=True)
-            
-    st.divider()
-    
-    st.markdown("### 🔎 Base de données & Recherche")
-    col_search1, col_search2 = st.columns(2)
-    with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
-    with col_search2: search_loc = st.text_input("📍 Rechercher un Emplacement (LOCATOR) :", "")
-        
-    df_tab1 = df.copy()
-    if search_part: df_tab1 = df_tab1[df_tab1['PART'].astype(str).str.contains(search_part, case=False, na=False)]
-    if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
-    
-    df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
-    df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
-    st.dataframe(df_display, height=350, use_container_width=True)
-
-
-# ------------------------------------------
-# ONGLET 2 : VUE VISUELLE
-# ------------------------------------------
-with tab2:
-    col_title, col_gauge = st.columns([3, 1])
-    with col_title:
-        st.markdown("### Plan Interactif du Magasin")
-        st.markdown("""
-        <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #aaa; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_gauge:
-        fig_gauge = go.Figure(go.Indicator(
-            mode = "gauge+number", value = total_locs,
-            domain = {'x': [0, 1], 'y': [0, 1]}, title = {'text': "Occupation", 'font': {'size': 14}},
-            gauge = {
-                'axis': {'range': [None, CAPACITE_MAX_MAGASIN]},
-                'bar': {'color': "#00a8e8"},
-                'steps': [
-                    {'range': [0, CAPACITE_MAX_MAGASIN*0.7], 'color': "#e0e4e8"},
-                    {'range': [CAPACITE_MAX_MAGASIN*0.7, CAPACITE_MAX_MAGASIN*0.9], 'color': "#f1c40f"},
-                    {'range': [CAPACITE_MAX_MAGASIN*0.9, CAPACITE_MAX_MAGASIN], 'color': "#ff4b4b"}],
-                'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}
-            }
-        ))
-        fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200)
-        st.plotly_chart(fig_gauge, use_container_width=True)
-
-    header_cols = st.columns([1] + [1]*25, gap="small")
-    for i in range(1, 26):
-        header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
-        
-    for r in list_rangees:
-        cols = st.columns([1] + [1]*25, gap="small")
-        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
-        
-        for i, m in enumerate(list_meubles_all):
-            df_m = df[(df['Rangée'] == r) & (df['Meuble'] == m)]
-            
-            if df_m.empty:
-                cols[i+1].button(m, key=f"btn_{r}_{m}_empty", disabled=True)
-            else:
-                df_m_dormants = df_m[(df_m['Last consumption'] > seuil_dormant) & (~df_m['PART'].isin(list_exclus))]
-                has_dormant = not df_m_dormants.empty
-                
-                btn_type = "primary" if has_dormant else "secondary"
-                if cols[i+1].button(m, key=f"btn_{r}_{m}", type=btn_type):
-                    st.session_state.sel_rangee = r
-                    st.session_state.sel_meuble = m
-
-    st.divider()
-
-    r_sel = st.session_state.sel_rangee
-    m_sel = st.session_state.sel_meuble
-    
-    st.markdown(f"### Détail : Rangée <span style='color:#00a8e8;'>{r_sel}</span> - Meuble <span style='color:#00a8e8;'>{m_sel}</span>", unsafe_allow_html=True)
-    
-    df_meuble = df[(df['Rangée'] == r_sel) & (df['Meuble'] == m_sel)]
-    
-    niveaux = ['050', '040', '030', '020', '010', '000']
-    colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
-    
-    html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
-    for col in colonnes: html_grid += f"<th>{col}</th>"
-    html_grid += "</tr>"
-    
-    for niv in niveaux:
-        html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
-        for col in colonnes:
-            items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
-            if items.empty:
-                html_grid += "<td class='cell-vide'>-</td>"
-            else:
-                parts = items['PART'].dropna().unique()
-                parts_str = "<br>".join([str(p) for p in parts])
-                
-                items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
-                is_dormant = not items_dormants.empty
-                
-                if is_dormant:
-                    html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
-                else:
-                    html_grid += f"<td class='cell-actif'>{parts_str}</td>"
-        html_grid += "</tr>"
-        
-    html_grid += "</table>"
-    st.markdown(html_grid, unsafe_allow_html=True)
-
-# ------------------------------------------
-# ONGLET 3 : EXCLUSIONS
-# ------------------------------------------
-with tab3:
-    st.markdown("### 🚫 Registre des dérogations")
-    st.info("Les références ajoutées dans cette liste seront totalement exclues du calcul des stocks dormants.")
-    
-    with st.form("form_exclusion", clear_on_submit=True):
-        col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
-        with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
-        with col_form2: new_comm = st.text_input("Motif / Justification :")
-        with col_form3: 
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit_excl = st.form_submit_button("➕ Ajouter")
-            
-        if submit_excl and new_excl:
-            st.session_state.exclusions[new_excl] = new_comm
-            st.rerun()
-
-    st.divider()
-
-    if st.session_state.exclusions:
-        st.markdown("**Liste des exclusions actives :**")
-        for excl, comm in list(st.session_state.exclusions.items()):
-            col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
-            with col_list1: st.markdown(f"**{excl}**")
-            with col_list2: st.markdown(f"*{comm}*")
-            with col_list3:
-                if st.button("❌ Retirer", key=f"del_{excl}"):
-                    del st.session_state.exclusions[excl]
-                    st.rerun()
-    else:
-        st.success("Aucune exclusion active pour le moment.")
+# Calcul de l'occupation uniquement sur les emplacements valides du magasin (qui ont une Rangée)
+total_locs_magasin = df.dropna(subset=['Rangée'])['LOCATOR'].nunique()
+taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if
