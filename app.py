@@ -31,19 +31,25 @@ st.markdown("""
     .cell-vide { background-color: #ffffff; color: #aaa; border: 1px dashed #eee; }
     .cell-actif { background-color: #00a8e8; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
     .cell-dormant { background-color: #ff4b4b; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.2); }
+    .cell-inconnu { background-color: #f39c12; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); } /* Nouvelle couleur Orange */
     .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; }
 
+    /* Boutons de la grille interactive */
     button[kind="primary"] { background-color: #ff4b4b !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(255, 75, 75, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="primary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(255, 75, 75, 0.5) !important; }
+    
     button[kind="secondary"] { background-color: #00a8e8 !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(0, 168, 232, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="secondary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(0, 168, 232, 0.5) !important; }
+    
+    button[kind="tertiary"] { background-color: #f39c12 !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(243, 156, 18, 0.3) !important; transition: all 0.2s ease !important; }
+    button[kind="tertiary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(243, 156, 18, 0.5) !important; }
+    
     button:disabled { background-color: #ffffff !important; color: #aaa !important; border: 1px dashed #ccc !important; box-shadow: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- FONCTION DE TRAITEMENT ---
 def parse_file(file):
-    """Lecture souple CSV ou Excel"""
     if file.name.endswith('.csv'):
         content = file.getvalue().decode('utf-8', errors='ignore')
         delimiter = ';' if ';' in content.split('\n')[0] else ','
@@ -72,11 +78,9 @@ def load_and_clean_data(file_source):
         st.stop()
         
     df[nom_colonne_jours] = pd.to_numeric(df[nom_colonne_jours], errors='coerce')
-    df = df.dropna(subset=[nom_colonne_jours])
+    # SUPPRESSION de la ligne df.dropna() pour garder les références sans données (NaN)
     df = df.drop_duplicates()
     
-    # Plus de filtre strict ! On extrait juste intelligemment pour le plan 2D.
-    # Pattern cible: Lettre + 2 Chiffres + Lettre + Chiffres (ex: A01A010)
     pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
     extracted = df['LOCATOR'].astype(str).str.extract(pattern)
     df['Rangée'] = extracted[0].str.upper()
@@ -97,9 +101,8 @@ st.sidebar.header("📂 Gestion des données")
 
 uploaded_file = st.sidebar.file_uploader("Importer le fichier DATA STOCK :", type=["xlsx", "csv"])
 
-# Gestion du fichier par défaut
 file_path_default = "DATA STOCK.xlsx"
-fallback_path = "DATA STOCK.xlsx - Sheet1.csv" # Pour le cloud s'il est au format CSV
+fallback_path = "DATA STOCK.xlsx - Sheet1.csv" 
 
 if uploaded_file is not None:
     file_to_load = uploaded_file
@@ -107,7 +110,6 @@ if uploaded_file is not None:
     file_data_to_download = uploaded_file.getvalue()
     download_name = uploaded_file.name
 else:
-    # Recherche du fichier par défaut
     if os.path.exists(file_path_default):
         file_to_load = file_path_default
     elif os.path.exists(fallback_path):
@@ -142,7 +144,6 @@ seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_val
 # Chargement
 df = load_and_clean_data(file_to_load)
 
-# Détermination dynamique de la taille du magasin pour la grille
 list_rangees = sorted(df['Rangée'].dropna().unique())
 if df['Meuble'].dropna().empty:
     max_rack = 25
@@ -163,9 +164,12 @@ st.title("📦 Tableau de Bord : Pilotage Magasin")
 total_refs = df['PART'].nunique()
 total_locs = df['LOCATOR'].nunique()
 
-# Calcul de l'occupation uniquement sur les emplacements valides du magasin (qui ont une Rangée)
 total_locs_magasin = df.dropna(subset=['Rangée'])['LOCATOR'].nunique()
-taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if CAPACITE_MAX_MAGASIN > 0 else 0
+if CAPACITE_MAX_MAGASIN > 0:
+    taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN) * 100
+else:
+    taux_occupation = 0
+
 list_exclus = list(st.session_state.exclusions.keys())
 df_dormants = df[(df['Last consumption'] > seuil_dormant) & (~df['PART'].isin(list_exclus))]
 
@@ -225,7 +229,6 @@ with tab1:
     col_pareto, col_top15 = st.columns(2)
     with col_pareto:
         st.markdown("**Répartition des stocks dormants par Rangée**")
-        # Les emplacements sans rangée (ex: "ERROR") sont regroupés sous "Hors Standard"
         df_dormants_pareto = df_dormants.copy()
         df_dormants_pareto['Rangée'] = df_dormants_pareto['Rangée'].fillna('Hors Standard')
         pareto_data = df_dormants_pareto.groupby('Rangée').size().reset_index(name='Nb_Dormants')
@@ -256,6 +259,7 @@ with tab1:
     if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
     
     df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
+    df_display['Last consumption'] = df_display['Last consumption'].fillna("Pas de données") # Remplacement visuel pour les NaNs
     df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
     st.dataframe(df_display, height=350, use_container_width=True)
 
@@ -269,6 +273,7 @@ with tab2:
         st.markdown("""
         <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #aaa; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
         </div>
@@ -308,7 +313,16 @@ with tab2:
                 df_m_dormants = df_m[(df_m['Last consumption'] > seuil_dormant) & (~df_m['PART'].isin(list_exclus))]
                 has_dormant = not df_m_dormants.empty
                 
-                btn_type = "primary" if has_dormant else "secondary"
+                # Vérification de présence de données manquantes (NaN)
+                has_unknown = df_m['Last consumption'].isna().any()
+                
+                if has_dormant:
+                    btn_type = "primary" # Rouge
+                elif has_unknown:
+                    btn_type = "tertiary" # Orange (Pas de données)
+                else:
+                    btn_type = "secondary" # Bleu (Actif)
+                    
                 if cols[i+1].button(m, key=f"btn_{r}_{m}", type=btn_type):
                     st.session_state.sel_rangee = r
                     st.session_state.sel_meuble = m
@@ -340,10 +354,13 @@ with tab2:
                 parts_str = "<br>".join([str(p) for p in parts])
                 
                 items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
-                is_dormant = not items_dormants.empty
+                has_dormant = not items_dormants.empty
+                has_unknown = items['Last consumption'].isna().any()
                 
-                if is_dormant:
+                if has_dormant:
                     html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
+                elif has_unknown:
+                    html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
                 else:
                     html_grid += f"<td class='cell-actif'>{parts_str}</td>"
         html_grid += "</tr>"
@@ -362,25 +379,4 @@ with tab3:
         col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
         with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
         with col_form2: new_comm = st.text_input("Motif / Justification :")
-        with col_form3: 
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit_excl = st.form_submit_button("➕ Ajouter")
-            
-        if submit_excl and new_excl:
-            st.session_state.exclusions[new_excl] = new_comm
-            st.rerun()
-
-    st.divider()
-
-    if st.session_state.exclusions:
-        st.markdown("**Liste des exclusions actives :**")
-        for excl, comm in list(st.session_state.exclusions.items()):
-            col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
-            with col_list1: st.markdown(f"**{excl}**")
-            with col_list2: st.markdown(f"*{comm}*")
-            with col_list3:
-                if st.button("❌ Retirer", key=f"del_{excl}"):
-                    del st.session_state.exclusions[excl]
-                    st.rerun()
-    else:
-        st.success("Aucune exclusion active pour le moment.")
+        with col_form3:
