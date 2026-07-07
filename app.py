@@ -165,4 +165,4 @@ total_locs = df['LOCATOR'].nunique()
 
 # Calcul de l'occupation uniquement sur les emplacements valides du magasin (qui ont une Rangée)
 total_locs_magasin = df.dropna(subset=['Rangée'])['LOCATOR'].nunique()
-taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if
+taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if CAPACITE_MAX_MAGASIN > 0 else 0
