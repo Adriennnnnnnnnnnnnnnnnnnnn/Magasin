@@ -166,3 +166,221 @@ total_locs = df['LOCATOR'].nunique()
 # Calcul de l'occupation uniquement sur les emplacements valides du magasin (qui ont une Rangée)
 total_locs_magasin = df.dropna(subset=['Rangée'])['LOCATOR'].nunique()
 taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if CAPACITE_MAX_MAGASIN > 0 else 0
+list_exclus = list(st.session_state.exclusions.keys())
+df_dormants = df[(df['Last consumption'] > seuil_dormant) & (~df['PART'].isin(list_exclus))]
+
+nb_refs_dormantes = df_dormants['PART'].nunique()
+capital_dormant = df_dormants['Valeur Totale'].sum()
+pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
+
+col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+with col_kpi1: 
+    st.markdown(f"""<div class="metric-card"><div class="metric-label">Taux d'Occupation</div><div class="metric-value">{taux_occupation:.1f}%</div><div class="metric-subtext-green">{total_locs_magasin} emplacements pris</div></div>""", unsafe_allow_html=True)
+with col_kpi2: 
+    st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
+with col_kpi3: 
+    st.markdown(f"""<div class="metric-card metric-card-red"><div class="metric-label">Réf. Dormantes (> {seuil_dormant}j)</div><div class="metric-value">{nb_refs_dormantes}</div><div class="metric-subtext">({pct_refs:.1f}% du total)</div></div>""", unsafe_allow_html=True)
+with col_kpi4: 
+    capital_format = "{:,.0f} €".format(capital_dormant).replace(",", " ")
+    st.markdown(f"""<div class="metric-card metric-card-gold"><div class="metric-label">Capital Immobilisé</div><div class="metric-value">{capital_format}</div><div class="metric-subtext">Dans les stocks dormants</div></div>""", unsafe_allow_html=True)
+
+# ==========================================
+# VUES (ONGLETS)
+# ==========================================
+tab1, tab2, tab3 = st.tabs(["📊 Vue Analytique & 5S", "🗺️ Vue Visuelle", "🚫 Dérogations & Exclusions"])
+
+# ------------------------------------------
+# ONGLET 1 : VUE ANALYTIQUE & 5S
+# ------------------------------------------
+with tab1:
+    st.markdown("### 🛠️ Outils de terrain et Suivi")
+    col_export, col_trend = st.columns([1, 2])
+    
+    with col_export:
+        st.markdown("**Plan d'action de tri (5S)**")
+        st.write("Générez la liste des emplacements prioritaires à traiter sur le terrain pour libérer de l'espace.")
+        
+        df_export = df_dormants[['LOCATOR', 'PART', 'Quantité', 'Prix Unitaire', 'Valeur Totale', 'Last consumption']].copy()
+        df_export = df_export.rename(columns={'LOCATOR': 'Emplacement', 'PART': 'Référence', 'Last consumption': 'Jours inactifs'})
+        df_export = df_export.sort_values(by='Valeur Totale', ascending=False)
+        df_export['Action (Jeter/Déplacer/Garder)'] = ""
+        df_export['Commentaires Opérateur'] = ""
+        
+        csv_export = df_export.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+        
+        st.download_button(label="📥 Exporter le plan d'action (CSV)", data=csv_export, file_name="Plan_Action_5S_Magasin.csv", mime="text/csv")
+
+    with col_trend:
+        st.markdown("**Évolution du capital immobilisé (Simulation 6 derniers mois)**")
+        mois_labels = [(datetime.today() - relativedelta(months=i)).strftime('%b %Y') for i in range(5, -1, -1)]
+        valeurs_historiques = [capital_dormant * (1 + (i*0.05)) for i in range(5, -1, -1)]
+        
+        df_hist = pd.DataFrame({'Mois': mois_labels, 'Capital': valeurs_historiques})
+        fig_hist = px.line(df_hist, x='Mois', y='Capital', markers=True, color_discrete_sequence=["#f1c40f"])
+        fig_hist.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=200, yaxis_title="Euros (€)")
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+    st.divider()
+
+    col_pareto, col_top15 = st.columns(2)
+    with col_pareto:
+        st.markdown("**Répartition des stocks dormants par Rangée**")
+        # Les emplacements sans rangée (ex: "ERROR") sont regroupés sous "Hors Standard"
+        df_dormants_pareto = df_dormants.copy()
+        df_dormants_pareto['Rangée'] = df_dormants_pareto['Rangée'].fillna('Hors Standard')
+        pareto_data = df_dormants_pareto.groupby('Rangée').size().reset_index(name='Nb_Dormants')
+        pareto_data = pareto_data.sort_values(by='Nb_Dormants', ascending=False)
+        if not pareto_data.empty:
+            fig_pareto = px.bar(pareto_data, x='Rangée', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"])
+            fig_pareto.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
+            st.plotly_chart(fig_pareto, use_container_width=True)
+            
+    with col_top15:
+        st.markdown("**Top 15 des emplacements avec le plus de dormants**")
+        top_loc = df_dormants.groupby('LOCATOR').size().reset_index(name='Nb_Dormants')
+        top_loc = top_loc.sort_values(by='Nb_Dormants', ascending=False).head(15)
+        if not top_loc.empty:
+            fig = px.bar(top_loc, x='LOCATOR', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"])
+            fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350)
+            st.plotly_chart(fig, use_container_width=True)
+            
+    st.divider()
+    
+    st.markdown("### 🔎 Base de données & Recherche")
+    col_search1, col_search2 = st.columns(2)
+    with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
+    with col_search2: search_loc = st.text_input("📍 Rechercher un Emplacement (LOCATOR) :", "")
+        
+    df_tab1 = df.copy()
+    if search_part: df_tab1 = df_tab1[df_tab1['PART'].astype(str).str.contains(search_part, case=False, na=False)]
+    if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
+    
+    df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
+    df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
+    st.dataframe(df_display, height=350, use_container_width=True)
+
+# ------------------------------------------
+# ONGLET 2 : VUE VISUELLE
+# ------------------------------------------
+with tab2:
+    col_title, col_gauge = st.columns([3, 1])
+    with col_title:
+        st.markdown("### Plan Interactif du Magasin")
+        st.markdown("""
+        <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #aaa; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_gauge:
+        fig_gauge = go.Figure(go.Indicator(
+            mode = "gauge+number", value = total_locs_magasin,
+            domain = {'x': [0, 1], 'y': [0, 1]}, title = {'text': "Occupation", 'font': {'size': 14}},
+            gauge = {
+                'axis': {'range': [None, CAPACITE_MAX_MAGASIN]},
+                'bar': {'color': "#00a8e8"},
+                'steps': [
+                    {'range': [0, CAPACITE_MAX_MAGASIN*0.7], 'color': "#e0e4e8"},
+                    {'range': [CAPACITE_MAX_MAGASIN*0.7, CAPACITE_MAX_MAGASIN*0.9], 'color': "#f1c40f"},
+                    {'range': [CAPACITE_MAX_MAGASIN*0.9, CAPACITE_MAX_MAGASIN], 'color': "#ff4b4b"}],
+                'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}
+            }
+        ))
+        fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200)
+        st.plotly_chart(fig_gauge, use_container_width=True)
+
+    header_cols = st.columns([1] + [1]*max_rack, gap="small")
+    for i, m in enumerate(list_meubles_all):
+        header_cols[i+1].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{m}</div>", unsafe_allow_html=True)
+        
+    for r in list_rangees:
+        cols = st.columns([1] + [1]*max_rack, gap="small")
+        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
+        
+        for i, m in enumerate(list_meubles_all):
+            df_m = df[(df['Rangée'] == r) & (df['Meuble'] == m)]
+            
+            if df_m.empty:
+                cols[i+1].button(m, key=f"btn_{r}_{m}_empty", disabled=True)
+            else:
+                df_m_dormants = df_m[(df_m['Last consumption'] > seuil_dormant) & (~df_m['PART'].isin(list_exclus))]
+                has_dormant = not df_m_dormants.empty
+                
+                btn_type = "primary" if has_dormant else "secondary"
+                if cols[i+1].button(m, key=f"btn_{r}_{m}", type=btn_type):
+                    st.session_state.sel_rangee = r
+                    st.session_state.sel_meuble = m
+
+    st.divider()
+
+    r_sel = st.session_state.sel_rangee
+    m_sel = st.session_state.sel_meuble
+    
+    st.markdown(f"### Détail : Rangée <span style='color:#00a8e8;'>{r_sel}</span> - Meuble <span style='color:#00a8e8;'>{m_sel}</span>", unsafe_allow_html=True)
+    
+    df_meuble = df[(df['Rangée'] == r_sel) & (df['Meuble'] == m_sel)]
+    
+    niveaux = ['050', '040', '030', '020', '010', '000']
+    colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
+    
+    html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
+    for col in colonnes: html_grid += f"<th>{col}</th>"
+    html_grid += "</tr>"
+    
+    for niv in niveaux:
+        html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
+        for col in colonnes:
+            items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
+            if items.empty:
+                html_grid += "<td class='cell-vide'>-</td>"
+            else:
+                parts = items['PART'].dropna().unique()
+                parts_str = "<br>".join([str(p) for p in parts])
+                
+                items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
+                is_dormant = not items_dormants.empty
+                
+                if is_dormant:
+                    html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
+                else:
+                    html_grid += f"<td class='cell-actif'>{parts_str}</td>"
+        html_grid += "</tr>"
+        
+    html_grid += "</table>"
+    st.markdown(html_grid, unsafe_allow_html=True)
+
+# ------------------------------------------
+# ONGLET 3 : EXCLUSIONS
+# ------------------------------------------
+with tab3:
+    st.markdown("### 🚫 Registre des dérogations")
+    st.info("Les références ajoutées dans cette liste seront totalement exclues du calcul des stocks dormants.")
+    
+    with st.form("form_exclusion", clear_on_submit=True):
+        col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
+        with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
+        with col_form2: new_comm = st.text_input("Motif / Justification :")
+        with col_form3: 
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_excl = st.form_submit_button("➕ Ajouter")
+            
+        if submit_excl and new_excl:
+            st.session_state.exclusions[new_excl] = new_comm
+            st.rerun()
+
+    st.divider()
+
+    if st.session_state.exclusions:
+        st.markdown("**Liste des exclusions actives :**")
+        for excl, comm in list(st.session_state.exclusions.items()):
+            col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
+            with col_list1: st.markdown(f"**{excl}**")
+            with col_list2: st.markdown(f"*{comm}*")
+            with col_list3:
+                if st.button("❌ Retirer", key=f"del_{excl}"):
+                    del st.session_state.exclusions[excl]
+                    st.rerun()
+    else:
+        st.success("Aucune exclusion active pour le moment.")
