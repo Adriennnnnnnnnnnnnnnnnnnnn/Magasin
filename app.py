@@ -27,23 +27,19 @@ st.markdown("""
     
     table.meuble-grid { width: 100%; border-collapse: separate; border-spacing: 2px; text-align: center; color: #333; font-size: 12px; margin-top: 10px; }
     table.meuble-grid th { background-color: #f0f2f6; color: #31333F; padding: 12px; border-radius: 4px; border: none; }
-    table.meuble-grid td { padding: 12px; width: 14%; vertical-align: middle; font-weight: bold; border-radius: 4px; border: 1px solid #f0f2f6; }
-    .cell-vide { background-color: #ffffff; color: #aaa; border: 1px dashed #eee; }
+    table.meuble-grid td { padding: 12px; vertical-align: middle; font-weight: bold; border-radius: 4px; border: 1px solid #f0f2f6; }
     .cell-actif { background-color: #00a8e8; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
     .cell-dormant { background-color: #ff4b4b; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.2); }
-    .cell-inconnu { background-color: #f39c12; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); } /* Nouvelle couleur Orange */
-    .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; }
+    .cell-inconnu { background-color: #f39c12; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
+    .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; width: 80px; }
+    .cell-null { border: none !important; background-color: transparent !important; } /* Case invisible pour le jumeau numérique */
 
-    /* Boutons de la grille interactive */
     button[kind="primary"] { background-color: #ff4b4b !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(255, 75, 75, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="primary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(255, 75, 75, 0.5) !important; }
-    
     button[kind="secondary"] { background-color: #00a8e8 !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(0, 168, 232, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="secondary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(0, 168, 232, 0.5) !important; }
-    
     button[kind="tertiary"] { background-color: #f39c12 !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(243, 156, 18, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="tertiary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(243, 156, 18, 0.5) !important; }
-    
     button:disabled { background-color: #ffffff !important; color: #aaa !important; border: 1px dashed #ccc !important; box-shadow: none !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -78,7 +74,6 @@ def load_and_clean_data(file_source):
         st.stop()
         
     df[nom_colonne_jours] = pd.to_numeric(df[nom_colonne_jours], errors='coerce')
-    # SUPPRESSION de la ligne df.dropna() pour garder les références sans données (NaN)
     df = df.drop_duplicates()
     
     pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
@@ -259,7 +254,7 @@ with tab1:
     if search_loc: df_tab1 = df_tab1[df_tab1['LOCATOR'].astype(str).str.contains(search_loc, case=False, na=False)]
     
     df_display = df_tab1[['PART', 'LOCATOR', 'Last consumption', 'Quantité', 'Valeur Totale']].copy()
-    df_display['Last consumption'] = df_display['Last consumption'].fillna("Pas de données") # Remplacement visuel pour les NaNs
+    df_display['Last consumption'] = df_display['Last consumption'].fillna("Pas de données")
     df_display = df_display.rename(columns={'Last consumption': 'Dernière consommation (jours)'})
     st.dataframe(df_display, height=350, use_container_width=True)
 
@@ -275,7 +270,6 @@ with tab2:
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #aaa; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -312,16 +306,14 @@ with tab2:
             else:
                 df_m_dormants = df_m[(df_m['Last consumption'] > seuil_dormant) & (~df_m['PART'].isin(list_exclus))]
                 has_dormant = not df_m_dormants.empty
-                
-                # Vérification de présence de données manquantes (NaN)
                 has_unknown = df_m['Last consumption'].isna().any()
                 
                 if has_dormant:
-                    btn_type = "primary" # Rouge
+                    btn_type = "primary"
                 elif has_unknown:
-                    btn_type = "tertiary" # Orange (Pas de données)
+                    btn_type = "tertiary"
                 else:
-                    btn_type = "secondary" # Bleu (Actif)
+                    btn_type = "secondary"
                     
                 if cols[i+1].button(m, key=f"btn_{r}_{m}", type=btn_type):
                     st.session_state.sel_rangee = r
@@ -336,8 +328,13 @@ with tab2:
     
     df_meuble = df[(df['Rangée'] == r_sel) & (df['Meuble'] == m_sel)]
     
-    niveaux = ['050', '040', '030', '020', '010', '000']
-    colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
+    # --- JUMEAU NUMÉRIQUE : GÉNÉRATION DYNAMIQUE ---
+    # Déduction de la forme réelle du meuble d'après les données existantes
+    niveaux = sorted(df_meuble['Niveau'].dropna().unique(), reverse=True)
+    colonnes = sorted(df_meuble['Colonne'].dropna().unique(), reverse=True)
+    
+    if not niveaux: niveaux = ['000'] # Sécurité anti-plantage si meuble vide
+    if not colonnes: colonnes = ['A']
     
     html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
     for col in colonnes: html_grid += f"<th>{col}</th>"
@@ -348,7 +345,8 @@ with tab2:
         for col in colonnes:
             items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
             if items.empty:
-                html_grid += "<td class='cell-vide'>-</td>"
+                # La case n'existe pas dans le fichier, on la rend transparente pour sculpter le meuble
+                html_grid += "<td class='cell-null'></td>"
             else:
                 parts = items['PART'].dropna().unique()
                 parts_str = "<br>".join([str(p) for p in parts])
