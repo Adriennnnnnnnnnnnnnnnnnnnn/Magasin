@@ -379,4 +379,25 @@ with tab3:
         col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
         with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
         with col_form2: new_comm = st.text_input("Motif / Justification :")
-        with col_form3:
+        with col_form3: 
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_excl = st.form_submit_button("➕ Ajouter")
+            
+        if submit_excl and new_excl:
+            st.session_state.exclusions[new_excl] = new_comm
+            st.rerun()
+
+    st.divider()
+
+    if st.session_state.exclusions:
+        st.markdown("**Liste des exclusions actives :**")
+        for excl, comm in list(st.session_state.exclusions.items()):
+            col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
+            with col_list1: st.markdown(f"**{excl}**")
+            with col_list2: st.markdown(f"*{comm}*")
+            with col_list3:
+                if st.button("❌ Retirer", key=f"del_{excl}"):
+                    del st.session_state.exclusions[excl]
+                    st.rerun()
+    else:
+        st.success("Aucune exclusion active pour le moment.")
