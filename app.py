@@ -10,9 +10,35 @@ from dateutil.relativedelta import relativedelta
 # Configuration de la page
 st.set_page_config(page_title="Vue d'Ensemble Magasin", page_icon="📦", layout="wide")
 
+# --- FONCTION DE GÉNÉRATION DU MAGASIN THÉORIQUE ---
+def generate_theoretical_locations():
+    locs = set()
+    rangees = ['A','B','C','D','E','F','G','H','J','K','L','M']
+    for r in rangees:
+        for m in range(1, 26):
+            m_str = f"{m:02d}"
+            if r == 'M':
+                cols = ['A', 'B', 'C']
+                if m_str in ['07', '08']:
+                    nivs = ['000', '010', '020']
+                else:
+                    nivs = ['000', '010', '020', '030', '040']
+            else:
+                cols = ['A', 'B', 'C', 'D', 'E', 'F']
+                nivs = ['000', '010', '020', '030', '040', '050']
+
+            for c in cols:
+                for n in nivs:
+                    locs.add(f"{r}{m_str}{c}{n}")
+    return locs
+
 # --- INITIALISATION DES VARIABLES DE SESSION ---
 if 'exclusions' not in st.session_state:
     st.session_state.exclusions = {} 
+if 'rename_mapping' not in st.session_state:
+    st.session_state.rename_mapping = {}
+if 'master_locations' not in st.session_state:
+    st.session_state.master_locations = generate_theoretical_locations()
 
 # --- STYLE CSS PERSONNALISÉ ---
 st.markdown("""
@@ -27,14 +53,13 @@ st.markdown("""
     
     table.meuble-grid { width: 100%; border-collapse: separate; border-spacing: 3px; text-align: center; color: #333; font-size: 12px; margin-top: 10px; }
     table.meuble-grid th { background-color: #f0f2f6; color: #31333F; padding: 12px; border-radius: 4px; border: none; }
-    table.meuble-grid td { padding: 12px; vertical-align: middle; font-weight: bold; border-radius: 4px; border: none; }
-    
-    /* Couleurs des cases du quadrillage */
+    table.meuble-grid td { padding: 12px; vertical-align: middle; font-weight: bold; border-radius: 4px; border: 1px solid #f0f2f6; }
+    .cell-vide { background-color: #ffffff; color: #aaa; border: 1px dashed #ccc; }
+    .cell-inexistant { background-color: #d1d8e0; border: none !important; }
     .cell-actif { background-color: #00a8e8; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
     .cell-dormant { background-color: #ff4b4b; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.2); }
     .cell-inconnu { background-color: #f39c12; color: white; box-shadow: inset 0 0 5px rgba(0,0,0,0.1); }
-    .cell-inexistant { background-color: #d1d8e0; color: #7f8fa6; border: 1px dashed #a5b1c2 !important; } /* Gris pour les emplacements vides/inexistants */
-    .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; width: 80px; border: 1px solid #d1d8e0 !important; }
+    .cell-niveau { background-color: #e0e4e8; color: #31333F; font-weight: bold; width: 80px; }
 
     button[kind="primary"] { background-color: #ff4b4b !important; border: none !important; border-radius: 8px !important; color: white !important; padding: 0 !important; box-shadow: 0 3px 5px rgba(255, 75, 75, 0.3) !important; transition: all 0.2s ease !important; }
     button[kind="primary"]:hover { transform: translateY(-2px); box-shadow: 0 5px 8px rgba(255, 75, 75, 0.5) !important; }
@@ -57,7 +82,7 @@ def parse_file(file):
         return pd.read_excel(file, engine='openpyxl')
 
 @st.cache_data
-def load_and_clean_data(file_source):
+def load_base_data(file_source):
     if isinstance(file_source, str):
         if file_source.endswith('.csv'):
             df = pd.read_csv(file_source, sep=None, engine='python')
@@ -77,13 +102,6 @@ def load_and_clean_data(file_source):
         
     df[nom_colonne_jours] = pd.to_numeric(df[nom_colonne_jours], errors='coerce')
     df = df.drop_duplicates()
-    
-    pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
-    extracted = df['LOCATOR'].astype(str).str.extract(pattern)
-    df['Rangée'] = extracted[0].str.upper()
-    df['Meuble'] = extracted[1]
-    df['Colonne'] = extracted[2].str.upper()
-    df['Niveau'] = extracted[3]
         
     df['Prix Unitaire'] = pd.to_numeric(df[nom_colonne_prix].astype(str).str.replace(',', '.').str.replace('€', '').str.replace(' ', ''), errors='coerce').fillna(0)
     df['Quantité'] = pd.to_numeric(df[nom_colonne_qte], errors='coerce').fillna(0)
@@ -138,8 +156,24 @@ st.sidebar.divider()
 st.sidebar.header("⚙️ Paramètres d'analyse")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
-# Chargement
-df = load_and_clean_data(file_to_load)
+# Chargement sécurisé
+df = load_base_data(file_to_load).copy()
+
+# Application du renommage (si défini dans le 4ème onglet)
+if st.session_state.rename_mapping:
+    df['LOCATOR'] = df['LOCATOR'].replace(st.session_state.rename_mapping)
+
+# Extraction dynamique des adresses
+pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
+extracted = df['LOCATOR'].astype(str).str.extract(pattern)
+df['Rangée'] = extracted[0].str.upper()
+df['Meuble'] = extracted[1]
+df['Colonne'] = extracted[2].str.upper()
+df['Niveau'] = extracted[3]
+
+# Mise à jour automatique de la base maître si le fichier contient des emplacements non répertoriés
+current_valid_locs = df.dropna(subset=['Rangée'])['LOCATOR'].unique()
+st.session_state.master_locations.update(current_valid_locs)
 
 list_rangees = sorted(df['Rangée'].dropna().unique())
 if df['Meuble'].dropna().empty:
@@ -148,7 +182,7 @@ else:
     max_rack = max(25, int(df['Meuble'].dropna().astype(int).max()))
 list_meubles_all = [f"{i:02d}" for i in range(1, max_rack + 1)]
 
-CAPACITE_MAX_MAGASIN = len(list_rangees) * len(list_meubles_all) * 6 * 6
+CAPACITE_MAX_MAGASIN = len(st.session_state.master_locations)
 
 if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = list_rangees[0] if list_rangees else 'A'
 if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
@@ -159,9 +193,8 @@ if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
 st.title("📦 Tableau de Bord : Pilotage Magasin")
 
 total_refs = df['PART'].nunique()
-total_locs = df['LOCATOR'].nunique()
-
 total_locs_magasin = df.dropna(subset=['Rangée'])['LOCATOR'].nunique()
+
 if CAPACITE_MAX_MAGASIN > 0:
     taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN) * 100
 else:
@@ -176,7 +209,7 @@ pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
 
 col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
 with col_kpi1: 
-    st.markdown(f"""<div class="metric-card"><div class="metric-label">Taux d'Occupation</div><div class="metric-value">{taux_occupation:.1f}%</div><div class="metric-subtext-green">{total_locs_magasin} emplacements pris</div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="metric-card"><div class="metric-label">Taux d'Occupation</div><div class="metric-value">{taux_occupation:.1f}%</div><div class="metric-subtext-green">{total_locs_magasin} empl. occupés sur {CAPACITE_MAX_MAGASIN}</div></div>""", unsafe_allow_html=True)
 with col_kpi2: 
     st.markdown(f"""<div class="metric-card"><div class="metric-label">Références Totales</div><div class="metric-value">{total_refs}</div></div>""", unsafe_allow_html=True)
 with col_kpi3: 
@@ -188,7 +221,7 @@ with col_kpi4:
 # ==========================================
 # VUES (ONGLETS)
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["📊 Vue Analytique & 5S", "🗺️ Vue Visuelle", "🚫 Dérogations & Exclusions"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Vue Analytique", "🗺️ Vue Visuelle", "🚫 Dérogations & Exclusions", "🗄️ Gestion des Emplacements"])
 
 # ------------------------------------------
 # ONGLET 1 : VUE ANALYTIQUE & 5S
@@ -272,7 +305,8 @@ with tab2:
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
             <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border: 1px dashed #a5b1c2; border-radius: 3px;'></div> <b>Vide / Inexistant</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #ccc; border-radius: 3px;'></div> <b>Vide</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border-radius: 3px;'></div> <b>Inexistant (Ex: bac double)</b></div>
         </div>
         """, unsafe_allow_html=True)
     
@@ -311,12 +345,9 @@ with tab2:
                 has_dormant = not df_m_dormants.empty
                 has_unknown = df_m['Last consumption'].isna().any()
                 
-                if has_dormant:
-                    btn_type = "primary"
-                elif has_unknown:
-                    btn_type = "tertiary"
-                else:
-                    btn_type = "secondary"
+                if has_dormant: btn_type = "primary"
+                elif has_unknown: btn_type = "tertiary"
+                else: btn_type = "secondary"
                     
                 if cols[i+1].button(m, key=f"btn_{r}_{m}", type=btn_type):
                     st.session_state.sel_rangee = r
@@ -331,13 +362,9 @@ with tab2:
     
     df_meuble = df[(df['Rangée'] == r_sel) & (df['Meuble'] == m_sel)]
     
-    # RÈGLES FIXES POUR LA STRUCTURE DU MAGASIN (QUADRILLAGE COMPLET)
     if r_sel == 'M':
         colonnes = ['C', 'B', 'A']
-        if m_sel in ['07', '08']:
-            niveaux = ['020', '010', '000']
-        else:
-            niveaux = ['040', '030', '020', '010', '000']
+        niveaux = ['020', '010', '000'] if m_sel in ['07', '08'] else ['040', '030', '020', '010', '000']
     else:
         niveaux = ['050', '040', '030', '020', '010', '000']
         colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
@@ -349,24 +376,29 @@ with tab2:
     for niv in niveaux:
         html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
         for col in colonnes:
-            items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
-            if items.empty:
-                # La case est vide ou l'emplacement n'existe pas -> Colorié en GRIS
-                html_grid += "<td class='cell-inexistant'>-</td>"
+            expected_loc = f"{r_sel}{m_sel}{col}{niv}"
+            
+            # Vérification dans la base maître si l'emplacement existe physiquement
+            if expected_loc not in st.session_state.master_locations:
+                html_grid += "<td class='cell-inexistant'></td>"
             else:
-                parts = items['PART'].dropna().unique()
-                parts_str = "<br>".join([str(p) for p in parts])
-                
-                items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
-                has_dormant = not items_dormants.empty
-                has_unknown = items['Last consumption'].isna().any()
-                
-                if has_dormant:
-                    html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
-                elif has_unknown:
-                    html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
+                items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
+                if items.empty:
+                    html_grid += "<td class='cell-vide'></td>"
                 else:
-                    html_grid += f"<td class='cell-actif'>{parts_str}</td>"
+                    parts = items['PART'].dropna().unique()
+                    parts_str = "<br>".join([str(p) for p in parts])
+                    
+                    items_dormants = items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))]
+                    has_dormant = not items_dormants.empty
+                    has_unknown = items['Last consumption'].isna().any()
+                    
+                    if has_dormant:
+                        html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
+                    elif has_unknown:
+                        html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
+                    else:
+                        html_grid += f"<td class='cell-actif'>{parts_str}</td>"
         html_grid += "</tr>"
         
     html_grid += "</table>"
@@ -405,3 +437,57 @@ with tab3:
                     st.rerun()
     else:
         st.success("Aucune exclusion active pour le moment.")
+
+# ------------------------------------------
+# ONGLET 4 : GESTION DES EMPLACEMENTS (JUMEAU NUMÉRIQUE)
+# ------------------------------------------
+with tab4:
+    st.markdown("### 🗄️ Base Maître des Emplacements")
+    st.info("Ajustez ici la structure de votre magasin (le Jumeau Numérique). Supprimez les emplacements qui n'existent pas physiquement (ex: un bac qui prend la place de 2 colonnes) pour avoir un taux d'occupation exact.")
+
+    col_m1, _ = st.columns([1, 2])
+    with col_m1:
+        st.metric("Capacité Totale (Emplacements réels enregistrés)", CAPACITE_MAX_MAGASIN)
+
+    st.divider()
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("**➕ Ajouter un emplacement**")
+        new_loc = st.text_input("Nom (ex: A01B020) :")
+        if st.button("Ajouter", use_container_width=True):
+            if new_loc:
+                st.session_state.master_locations.add(new_loc.upper())
+                st.success(f"L'emplacement {new_loc.upper()} a été ajouté à la capacité totale !")
+                st.rerun()
+
+    with c2:
+        st.markdown("**✏️ Renommer un emplacement**")
+        old_loc = st.selectbox("Emplacement existant :", sorted(list(st.session_state.master_locations)))
+        new_name = st.text_input("Nouveau nom :")
+        if st.button("Renommer", use_container_width=True):
+            if old_loc and new_name:
+                new_name_up = new_name.upper()
+                st.session_state.master_locations.discard(old_loc)
+                st.session_state.master_locations.add(new_name_up)
+                st.session_state.rename_mapping[old_loc] = new_name_up
+                st.success(f"{old_loc} a été renommé en {new_name_up} !")
+                st.rerun()
+
+    with c3:
+        st.markdown("**🗑️ Supprimer des emplacements (Fantômes)**")
+        del_locs = st.multiselect("Sélectionnez les emplacements inexistants :", sorted(list(st.session_state.master_locations)))
+        if st.button("Supprimer", use_container_width=True):
+            if del_locs:
+                for d in del_locs:
+                    st.session_state.master_locations.discard(d)
+                st.success(f"{len(del_locs)} emplacement(s) supprimé(s) !")
+                st.rerun()
+
+    st.divider()
+    with st.expander("⚠️ Options Avancées : Réinitialiser la base"):
+        st.warning("Cette action va recréer la grille théorique complète de l'entrepôt et effacer toutes vos suppressions ou modifications manuelles.")
+        if st.button("🔄 Réinitialiser la grille", type="primary"):
+            st.session_state.master_locations = generate_theoretical_locations()
+            st.session_state.rename_mapping = {}
+            st.rerun()
