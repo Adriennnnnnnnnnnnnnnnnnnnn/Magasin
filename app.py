@@ -17,43 +17,7 @@ SERVER_CSV = "data_stock_serveur.csv"
 DEFAULT_XLSX = "DATA STOCK.xlsx"
 DEFAULT_CSV = "DATA STOCK.xlsx - Sheet1.csv"
 
-# --- RÈGLES DE VALIDATION ARCHITECTURALE ---
-def is_meuble_valid_for_row(r, m_int):
-    if r == 'M': return 7 <= m_int <= 21 and m_int != 13
-    elif r in ['G', 'H', 'J', 'K', 'L']: return 1 <= m_int <= 21
-    elif r == 'F': return 1 <= m_int <= 25
-    elif r == 'E': return 1 <= m_int <= 24
-    elif r in ['D', 'C', 'B']: return 1 <= m_int <= 25
-    elif r == 'A': return 1 <= m_int <= 21
-    return False
-
-def get_meuble_structure(r, m_str):
-    key = f"{r}{m_str}"
-    if key in st.session_state.custom_structures:
-        return st.session_state.custom_structures[key]["cols"], st.session_state.custom_structures[key]["nivs"]
-        
-    if r == 'M':
-        colonnes = ['C', 'B', 'A']
-        niveaux = ['020', '010', '000'] if m_str in ['07', '08'] else ['040', '030', '020', '010', '000']
-    else:
-        niveaux = ['050', '040', '030', '020', '010', '000']
-        colonnes = ['F', 'E', 'D', 'C', 'B', 'A']
-    return colonnes, niveaux
-
 # --- GESTION DE LA CONFIGURATION (PERSISTANCE) ---
-def generate_theoretical_locations():
-    locs = []
-    rangees = ['A','B','C','D','E','F','G','H','J','K','L','M']
-    for r in rangees:
-        for m in range(1, 26):
-            if is_meuble_valid_for_row(r, m):
-                m_str = f"{m:02d}"
-                colonnes, niveaux = get_meuble_structure(r, m_str)
-                for c in colonnes:
-                    for n in niveaux:
-                        locs.append(f"{r}{m_str}{c}{n}")
-    return locs
-
 def load_config():
     if os.path.exists(CONFIG_FILE):
         try:
@@ -75,6 +39,42 @@ def save_config():
             "custom_structures": st.session_state.custom_structures
         }, f, indent=4)
 
+def rebuild_config_from_data(df):
+    """Mouleur intelligent : Scan les emplacements et adapte la hauteur et la largeur de chaque meuble"""
+    pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
+    
+    # Prise en charge souple du nom de la colonne
+    if 'LOCATOR' not in df.columns: locs_series = df.iloc[:, 0].dropna().astype(str)
+    else: locs_series = df['LOCATOR'].dropna().astype(str)
+        
+    extracted = locs_series.str.extract(pattern)
+    extracted.columns = ['Rangee', 'Meuble', 'Colonne', 'Niveau']
+    extracted['LOCATOR'] = locs_series
+    extracted = extracted.dropna()
+    
+    st.session_state.custom_structures = {}
+    st.session_state.master_locations = set(extracted['LOCATOR'].unique().tolist())
+    
+    for (r, m), group in extracted.groupby(['Rangee', 'Meuble']):
+        max_col = group['Colonne'].max()
+        max_niv = group['Niveau'].max()
+        
+        # Colonnes générées automatiquement jusqu'à la max (Ex: de A à C)
+        cols = [chr(c) for c in range(ord('A'), ord(max_col) + 1)]
+        cols.sort(reverse=True)
+        
+        # Niveaux générés automatiquement jusqu'au max (Ex: de 000 à 080)
+        try:
+            max_n = int(max_niv)
+            nivs = [f"{i:03d}" for i in range(0, max_n + 10, 10)]
+        except:
+            nivs = sorted(group['Niveau'].unique().tolist())
+        nivs.sort(reverse=True)
+        
+        st.session_state.custom_structures[f"{r}{m}"] = {"cols": cols, "nivs": nivs}
+    
+    save_config()
+
 # --- FONCTIONS DE MANIPULATION DU JUMEAU NUMÉRIQUE ---
 def toggle_loc(loc_id):
     if loc_id in st.session_state.master_locations: st.session_state.master_locations.remove(loc_id)
@@ -83,8 +83,7 @@ def toggle_loc(loc_id):
 
 def toggle_col(r, m, col, niveaux):
     locs = [f"{r}{m}{col}{n}" for n in niveaux]
-    all_exist = all(l in st.session_state.master_locations for l in locs)
-    if all_exist:
+    if all(l in st.session_state.master_locations for l in locs):
         for l in locs: st.session_state.master_locations.discard(l)
     else:
         for l in locs: st.session_state.master_locations.add(l)
@@ -92,8 +91,7 @@ def toggle_col(r, m, col, niveaux):
 
 def toggle_niv(r, m, niv, colonnes):
     locs = [f"{r}{m}{c}{niv}" for c in colonnes]
-    all_exist = all(l in st.session_state.master_locations for l in locs)
-    if all_exist:
+    if all(l in st.session_state.master_locations for l in locs):
         for l in locs: st.session_state.master_locations.discard(l)
     else:
         for l in locs: st.session_state.master_locations.add(l)
@@ -101,10 +99,7 @@ def toggle_niv(r, m, niv, colonnes):
 
 def modify_structure(r, m, action, mod_type, val):
     key = f"{r}{m}"
-    if key not in st.session_state.custom_structures:
-        c, n = get_meuble_structure(r, m)
-        st.session_state.custom_structures[key] = {"cols": c.copy(), "nivs": n.copy()}
-        
+    if key not in st.session_state.custom_structures: return
     struct = st.session_state.custom_structures[key]
     
     if action == "add":
@@ -124,10 +119,9 @@ def modify_structure(r, m, action, mod_type, val):
         elif mod_type == "niv" and val in struct["nivs"]:
             struct["nivs"].remove(val)
             for c in struct["cols"]: st.session_state.master_locations.discard(f"{r}{m}{c}{val}")
-            
     save_config()
 
-# --- INITIALISATION DES VARIABLES DE SESSION ---
+# --- INITIALISATION ---
 if 'config_loaded' not in st.session_state:
     excl, locs, custom = load_config()
     st.session_state.exclusions = excl
@@ -135,7 +129,7 @@ if 'config_loaded' not in st.session_state:
     st.session_state.custom_structures = custom
     st.session_state.config_loaded = True
 
-# --- STYLE CSS PERSONNALISÉ ---
+# --- STYLE CSS ---
 st.markdown("""
 <style>
     .metric-card { background-color: #262730; border-radius: 10px; padding: 20px 15px; text-align: center; border-left: 5px solid #00a8e8; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
@@ -195,7 +189,7 @@ def load_base_data(file_source):
     return df
 
 # ==========================================
-# PANNEAU LATÉRAL (DÉTECTION & ENREGISTREMENT)
+# PANNEAU LATÉRAL (DÉTECTION & ENREGISTREMENT DU STOCK)
 # ==========================================
 st.sidebar.header("📂 Gestion des données")
 
@@ -218,7 +212,7 @@ elif os.path.exists(DEFAULT_CSV):
 
 uploaded_file = st.sidebar.file_uploader("Mettre à jour le fichier DATA STOCK :", type=["xlsx", "csv"])
 
-# Si un nouveau fichier est déposé, on l'écrit en dur sur le serveur pour le mémoriser
+# L'utilisateur uploade un fichier -> on le sauvegarde de façon permanente
 if uploaded_file is not None:
     if os.path.exists(SERVER_XLSX): os.remove(SERVER_XLSX)
     if os.path.exists(SERVER_CSV): os.remove(SERVER_CSV)
@@ -227,11 +221,11 @@ if uploaded_file is not None:
     with open(target_path, "wb") as f:
         f.write(uploaded_file.getvalue())
         
-    st.sidebar.success("Fichier mémorisé sur le serveur !")
+    st.sidebar.success("Fichier de stock sauvegardé sur le serveur !")
     st.cache_data.clear()
     st.rerun()
 
-# Blocage de sécurité si aucun fichier n'existe nulle part
+# Blocage si aucun fichier n'est trouvé
 if file_to_load is None:
     st.title("📦 Tableau de Bord : Pilotage Magasin")
     st.info("👋 Bienvenue ! Aucun fichier n'est mémorisé.\n\nVeuillez glisser votre fichier de stock (Excel ou CSV) une première fois dans le menu latéral gauche.")
@@ -247,27 +241,25 @@ st.sidebar.divider()
 st.sidebar.header("⚙️ Paramètres d'analyse")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
-# Traitement des données chargées automatiquement
+# Traitement des données
 df = load_base_data(file_to_load).copy()
 pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
 extracted = df['LOCATOR'].astype(str).str.extract(pattern)
 df['Rangée'], df['Meuble'], df['Colonne'], df['Niveau'] = extracted[0].str.upper(), extracted[1], extracted[2].str.upper(), extracted[3]
 
-# Synchronisation initiale du Jumeau numérique
-df_valid_entries = df.dropna(subset=['Rangée'])
-if not st.session_state.master_locations:
-    st.session_state.master_locations = set(df_valid_entries['LOCATOR'].unique())
-    save_config()
-else:
-    st.session_state.master_locations.update(df_valid_entries['LOCATOR'].unique())
+# Si la structure n'a jamais été créée, on force la génération sur les données actuelles
+if not st.session_state.custom_structures:
+    rebuild_config_from_data(df)
 
-list_rangees = ['A','B','C','D','E','F','G','H','J','K','L','M']
-max_rack = 25 
+list_rangees = sorted(list(set(key[0] for key in st.session_state.custom_structures.keys())))
+all_meubles = [key[1:] for key in st.session_state.custom_structures.keys()]
+max_rack = max(int(m) for m in all_meubles) if all_meubles else 25
+
 CAPACITE_MAX_MAGASIN = len(st.session_state.master_locations)
 
-if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = 'A'
+if 'sel_rangee' not in st.session_state: st.session_state.sel_rangee = list_rangees[0] if list_rangees else 'A'
 if 'sel_meuble' not in st.session_state: st.session_state.sel_meuble = '01'
-if 'edit_rangee' not in st.session_state: st.session_state.edit_rangee = 'A'
+if 'edit_rangee' not in st.session_state: st.session_state.edit_rangee = list_rangees[0] if list_rangees else 'A'
 if 'edit_meuble' not in st.session_state: st.session_state.edit_meuble = '01'
 
 # ==========================================
@@ -334,19 +326,30 @@ with tab1:
 # ONGLET 2 : VUE VISUELLE
 # ------------------------------------------
 with tab2:
-    st.markdown("### Plan Interactif du Magasin")
-    st.markdown("""
-    <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #ccc; border-radius: 3px;'></div> <b>Vide (Sans stock)</b></div>
-        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border-radius: 3px;'></div> <b>Inexistant</b></div>
-    </div>
-    """, unsafe_allow_html=True)
+    col_title, col_gauge = st.columns([3, 1])
+    with col_title:
+        st.markdown("### Plan Interactif du Magasin")
+        st.markdown("""
+        <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #ccc; border-radius: 3px;'></div> <b>Vide (Sans stock)</b></div>
+            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border-radius: 3px;'></div> <b>Inexistant</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_gauge:
+        fig_gauge = go.Figure(go.Indicator(
+            mode="gauge+number", value=total_locs_magasin, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "Occupation", 'font': {'size': 14}},
+            gauge={'axis': {'range': [None, CAPACITE_MAX_MAGASIN]}, 'bar': {'color': "#00a8e8"},
+                   'steps': [{'range': [0, CAPACITE_MAX_MAGASIN*0.7], 'color': "#e0e4e8"}, {'range': [CAPACITE_MAX_MAGASIN*0.7, CAPACITE_MAX_MAGASIN*0.9], 'color': "#f1c40f"}, {'range': [CAPACITE_MAX_MAGASIN*0.9, CAPACITE_MAX_MAGASIN], 'color': "#ff4b4b"}],
+                   'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}}
+        ))
+        st.plotly_chart(fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200), use_container_width=True)
 
     header_cols = st.columns([1] + [1]*max_rack, gap="small")
-    for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
+    for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
         
     for r in list_rangees:
         cols = st.columns([1] + [1]*max_rack, gap="small")
@@ -354,9 +357,10 @@ with tab2:
         
         for m in range(1, max_rack + 1):
             m_str = f"{m:02d}"
-            if is_meuble_valid_for_row(r, m):
-                df_m = df[(df['Rangée'] == r) & (df['Meuble'] == m_str)]
-                meuble_locs_actifs = [loc for loc in st.session_state.master_locations if loc.startswith(f"{r}{m_str}")]
+            key = f"{r}{m_str}"
+            if key in st.session_state.custom_structures:
+                df_m = df[(df['LOCATOR'].str.startswith(key, na=False))]
+                meuble_locs_actifs = [loc for loc in st.session_state.master_locations if loc.startswith(key)]
                 
                 if not meuble_locs_actifs: cols[m].button(m_str, key=f"btn_{r}_{m_str}_empty", disabled=True)
                 else:
@@ -373,30 +377,33 @@ with tab2:
     st.markdown(f"### Détail : Rangée <span style='color:#00a8e8;'>{r_sel}</span> - Meuble <span style='color:#00a8e8;'>{m_sel}</span>", unsafe_allow_html=True)
     
     df_meuble = df[(df['Rangée'] == r_sel) & (df['Meuble'] == m_sel)]
-    colonnes, niveaux = get_meuble_structure(r_sel, m_sel)
+    colonnes, niveaux = st.session_state.custom_structures.get(f"{r_sel}{m_sel}", {"cols":[], "nivs":[]}).values()
     
-    html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
-    for col in colonnes: html_grid += f"<th>{col}</th>"
-    html_grid += "</tr>"
-    
-    for niv in niveaux:
-        html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
-        for col in colonnes:
-            expected_loc = f"{r_sel}{m_sel}{col}{niv}"
-            if expected_loc not in st.session_state.master_locations:
-                html_grid += "<td class='cell-inexistant'>Inexistant</td>"
-            else:
-                items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
-                if items.empty: html_grid += "<td class='cell-vide'>Vide</td>"
-                else:
-                    parts_str = "<br>".join([str(p) for p in items['PART'].dropna().unique()])
-                    has_dormant = not items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))].empty
-                    has_unknown = items['Last consumption'].isna().any()
-                    if has_dormant: html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
-                    elif has_unknown: html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
-                    else: html_grid += f"<td class='cell-actif'>{parts_str}</td>"
+    if colonnes and niveaux:
+        html_grid = "<table class='meuble-grid'><tr><th>NIV / COL</th>"
+        for col in colonnes: html_grid += f"<th>{col}</th>"
         html_grid += "</tr>"
-    st.markdown(html_grid + "</table>", unsafe_allow_html=True)
+        
+        for niv in niveaux:
+            html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
+            for col in colonnes:
+                expected_loc = f"{r_sel}{m_sel}{col}{niv}"
+                if expected_loc not in st.session_state.master_locations:
+                    html_grid += "<td class='cell-inexistant'>Inexistant</td>"
+                else:
+                    items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
+                    if items.empty: html_grid += "<td class='cell-vide'>Vide</td>"
+                    else:
+                        parts_str = "<br>".join([str(p) for p in items['PART'].dropna().unique()])
+                        has_dormant = not items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))].empty
+                        has_unknown = items['Last consumption'].isna().any()
+                        if has_dormant: html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
+                        elif has_unknown: html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
+                        else: html_grid += f"<td class='cell-actif'>{parts_str}</td>"
+            html_grid += "</tr>"
+        st.markdown(html_grid + "</table>", unsafe_allow_html=True)
+    else:
+        st.warning("Aucune structure définie pour ce meuble.")
 
 # ------------------------------------------
 # ONGLET 3 : EXCLUSIONS
@@ -432,6 +439,16 @@ with tab3:
 # ------------------------------------------
 with tab4:
     st.markdown("### 🗄️ Éditeur Interactif du Jumeau Numérique")
+    
+    with st.expander("🏗️ Mettre à jour l'architecture depuis le fichier complet 'Emplacement.xlsx'", expanded=False):
+        st.info("Importez votre fichier maître des emplacements (celui qui contient tous les emplacements de l'entrepôt, même les vides) pour mouler automatiquement le jumeau numérique. **L'application s'adaptera instantanément à l'architecture exacte de ce fichier.**")
+        arch_file = st.file_uploader("Fichier d'emplacements (CSV ou Excel) :", type=["csv", "xlsx"])
+        if arch_file:
+            df_arch = parse_file(arch_file)
+            rebuild_config_from_data(df_arch)
+            st.success("Jumeau Numérique moulé avec succès ! Les dimensions de tous les meubles ont été adaptées.")
+            st.rerun()
+
     header_cols_edit = st.columns([1] + [1]*max_rack, gap="small")
     for i in range(1, max_rack + 1): header_cols_edit[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
         
@@ -440,7 +457,8 @@ with tab4:
         cols_edit[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px;'>{r}</div>", unsafe_allow_html=True)
         for m in range(1, max_rack + 1):
             m_str = f"{m:02d}"
-            if is_meuble_valid_for_row(r, m):
+            key = f"{r}{m_str}"
+            if key in st.session_state.custom_structures:
                 is_selected = (st.session_state.edit_rangee == r and st.session_state.edit_meuble == m_str)
                 if cols_edit[m].button(m_str, key=f"btn_edit_{r}_{m_str}", type="primary" if is_selected else "secondary"):
                     st.session_state.edit_rangee, st.session_state.edit_meuble = r, m_str
@@ -449,50 +467,46 @@ with tab4:
     st.divider()
     r_edit, m_edit = st.session_state.edit_rangee, st.session_state.edit_meuble
     st.markdown(f"### Modification : Rangée <span style='color:#00a8e8;'>{r_edit}</span> - Meuble <span style='color:#00a8e8;'>{m_edit}</span>", unsafe_allow_html=True)
-    colonnes_edit, niveaux_edit = get_meuble_structure(r_edit, m_edit)
-        
-    cols_header = st.columns([1] + [1]*len(colonnes_edit))
-    cols_header[0].markdown("<div style='text-align:center; color:#31333F; margin-top:10px;'><b>NIV / COL</b></div>", unsafe_allow_html=True)
-    for j, col in enumerate(colonnes_edit):
-        cols_header[j+1].button(f"↕️ {col}", key=f"tog_col_{r_edit}_{m_edit}_{col}", on_click=toggle_col, args=(r_edit, m_edit, col, niveaux_edit), use_container_width=True)
-        
-    st.write("") 
-    for niv in niveaux_edit:
-        cols_grid = st.columns([1] + [1]*len(colonnes_edit))
-        cols_grid[0].button(f"↔️ {niv}", key=f"tog_niv_{r_edit}_{m_edit}_{niv}", on_click=toggle_niv, args=(r_edit, m_edit, niv, colonnes_edit), use_container_width=True)
+    
+    colonnes_edit, niveaux_edit = st.session_state.custom_structures.get(f"{r_edit}{m_edit}", {"cols":[], "nivs":[]}).values()
+    
+    if colonnes_edit and niveaux_edit:
+        cols_header = st.columns([1] + [1]*len(colonnes_edit))
+        cols_header[0].markdown("<div style='text-align:center; color:#31333F; margin-top:10px;'><b>NIV / COL</b></div>", unsafe_allow_html=True)
         for j, col in enumerate(colonnes_edit):
-            loc_id = f"{r_edit}{m_edit}{col}{niv}"
-            exists = loc_id in st.session_state.master_locations
-            cols_grid[j+1].button("🟢" if exists else "⬛", key=f"edit_btn_{loc_id}", on_click=toggle_loc, args=(loc_id,), use_container_width=True)
+            cols_header[j+1].button(f"↕️ {col}", key=f"tog_col_{r_edit}_{m_edit}_{col}", on_click=toggle_col, args=(r_edit, m_edit, col, niveaux_edit), use_container_width=True)
+            
+        st.write("") 
+        for niv in niveaux_edit:
+            cols_grid = st.columns([1] + [1]*len(colonnes_edit))
+            cols_grid[0].button(f"↔️ {niv}", key=f"tog_niv_{r_edit}_{m_edit}_{niv}", on_click=toggle_niv, args=(r_edit, m_edit, niv, colonnes_edit), use_container_width=True)
+            for j, col in enumerate(colonnes_edit):
+                loc_id = f"{r_edit}{m_edit}{col}{niv}"
+                exists = loc_id in st.session_state.master_locations
+                cols_grid[j+1].button("🟢" if exists else "⬛", key=f"edit_btn_{loc_id}", on_click=toggle_loc, args=(loc_id,), use_container_width=True)
 
-    st.write("")
-    with st.expander("🛠️ Ajouter ou Retirer des Lignes / Colonnes"):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Colonnes**")
-            new_col = st.text_input("Nouvelle Colonne (ex: G) :", max_chars=1).upper()
-            if st.button("➕ Ajouter Colonne") and new_col:
-                modify_structure(r_edit, m_edit, "add", "col", new_col)
-                st.rerun()
-            del_col = st.selectbox("Supprimer complètement la colonne :", colonnes_edit)
-            if st.button("🗑️ Supprimer Colonne"):
-                modify_structure(r_edit, m_edit, "remove", "col", del_col)
-                st.rerun()
-        with c2:
-            st.markdown("**Lignes (Niveaux)**")
-            new_niv = st.text_input("Nouveau Niveau (ex: 060) :", max_chars=3)
-            if st.button("➕ Ajouter Ligne") and new_niv:
-                modify_structure(r_edit, m_edit, "add", "niv", new_niv)
-                st.rerun()
-            del_niv = st.selectbox("Supprimer complètement la ligne :", niveaux_edit)
-            if st.button("🗑️ Supprimer Ligne"):
-                modify_structure(r_edit, m_edit, "remove", "niv", del_niv)
-                st.rerun()
-
-    st.divider()
-    with st.expander("⚠️ Options de Réinitialisation"):
-        if st.button("🔄 Forcer la grille théorique complète", type="primary"):
-            st.session_state.master_locations = set(generate_theoretical_locations())
-            st.session_state.custom_structures = {}
-            save_config()
-            st.rerun()
+        st.write("")
+        with st.expander("🛠️ Ajouter ou Retirer des Lignes / Colonnes"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Colonnes**")
+                new_col = st.text_input("Nouvelle Colonne (ex: G) :", max_chars=1).upper()
+                if st.button("➕ Ajouter Colonne") and new_col:
+                    modify_structure(r_edit, m_edit, "add", "col", new_col)
+                    st.rerun()
+                del_col = st.selectbox("Supprimer complètement la colonne :", colonnes_edit)
+                if st.button("🗑️ Supprimer Colonne"):
+                    modify_structure(r_edit, m_edit, "remove", "col", del_col)
+                    st.rerun()
+            with c2:
+                st.markdown("**Lignes (Niveaux)**")
+                new_niv = st.text_input("Nouveau Niveau (ex: 060) :", max_chars=3)
+                if st.button("➕ Ajouter Ligne") and new_niv:
+                    modify_structure(r_edit, m_edit, "add", "niv", new_niv)
+                    st.rerun()
+                del_niv = st.selectbox("Supprimer complètement la ligne :", niveaux_edit)
+                if st.button("🗑️ Supprimer Ligne"):
+                    modify_structure(r_edit, m_edit, "remove", "niv", del_niv)
+                    st.rerun()
+    else:
+        st.warning("Aucune structure définie pour ce meuble.")
