@@ -12,6 +12,10 @@ from dateutil.relativedelta import relativedelta
 st.set_page_config(page_title="Vue d'Ensemble Magasin", page_icon="📦", layout="wide")
 
 CONFIG_FILE = "config_magasin.json"
+SERVER_XLSX = "data_stock_serveur.xlsx"
+SERVER_CSV = "data_stock_serveur.csv"
+DEFAULT_XLSX = "DATA STOCK.xlsx"
+DEFAULT_CSV = "DATA STOCK.xlsx - Sheet1.csv"
 
 # --- RÈGLES DE VALIDATION ARCHITECTURALE ---
 def is_meuble_valid_for_row(r, m_int):
@@ -24,12 +28,10 @@ def is_meuble_valid_for_row(r, m_int):
     return False
 
 def get_meuble_structure(r, m_str):
-    # 1. Vérifier s'il y a une structure personnalisée sauvegardée
     key = f"{r}{m_str}"
     if key in st.session_state.custom_structures:
         return st.session_state.custom_structures[key]["cols"], st.session_state.custom_structures[key]["nivs"]
         
-    # 2. Sinon, appliquer les règles par défaut
     if r == 'M':
         colonnes = ['C', 'B', 'A']
         niveaux = ['020', '010', '000'] if m_str in ['07', '08'] else ['040', '030', '020', '010', '000']
@@ -166,79 +168,92 @@ st.markdown("""
 
 # --- FONCTION DE LECTURE ---
 def parse_file(file):
+    if isinstance(file, str):
+        if file.endswith('.csv'): return pd.read_csv(file, sep=';', encoding='utf-8', on_bad_lines='skip')
+        return pd.read_excel(file, engine='openpyxl')
     if file.name.endswith('.csv'):
         content = file.getvalue().decode('utf-8', errors='ignore')
         delimiter = ';' if ';' in content.split('\n')[0] else ','
         file.seek(0)
         return pd.read_csv(file, sep=delimiter, encoding='utf-8', on_bad_lines='skip')
-    else:
-        return pd.read_excel(file, engine='openpyxl')
+    return pd.read_excel(file, engine='openpyxl')
 
 @st.cache_data
 def load_base_data(file_source):
-    if isinstance(file_source, str):
-        if file_source.endswith('.csv'): df = pd.read_csv(file_source, sep=None, engine='python')
-        else: df = pd.read_excel(file_source, engine="openpyxl")
-    else:
-        df = parse_file(file_source)
-    
+    df = parse_file(file_source)
     nom_colonne_prix, nom_colonne_qte, nom_colonne_jours = "Unit Price €", "Current Stock Qty", "Last consumption"
     
     if nom_colonne_prix not in df.columns or nom_colonne_qte not in df.columns or nom_colonne_jours not in df.columns:
-        st.error("🚨 **Erreur de lecture des colonnes**")
+        st.error("🚨 **Erreur de lecture des colonnes nécessaires**")
         st.stop()
         
     df[nom_colonne_jours] = pd.to_numeric(df[nom_colonne_jours], errors='coerce')
     df = df.drop_duplicates()
-        
     df['Prix Unitaire'] = pd.to_numeric(df[nom_colonne_prix].astype(str).str.replace(',', '.').str.replace('€', '').str.replace(' ', ''), errors='coerce').fillna(0)
     df['Quantité'] = pd.to_numeric(df[nom_colonne_qte], errors='coerce').fillna(0)
     df['Valeur Totale'] = df['Quantité'] * df['Prix Unitaire']
-    
     return df
 
 # ==========================================
-# PANNEAU LATÉRAL (GESTION DU FICHIER)
+# PANNEAU LATÉRAL (DÉTECTION & ENREGISTREMENT)
 # ==========================================
 st.sidebar.header("📂 Gestion des données")
-uploaded_file = st.sidebar.file_uploader("Importer le fichier DATA STOCK :", type=["xlsx", "csv"])
 
-file_path_default, fallback_path = "DATA STOCK.xlsx", "DATA STOCK.xlsx - Sheet1.csv"
+file_to_load = None
+mod_time = "Aucune donnée active"
 
+# Détection automatisée du fichier persistant sur le serveur
+if os.path.exists(SERVER_XLSX):
+    file_to_load = SERVER_XLSX
+    mod_time = datetime.fromtimestamp(os.path.getmtime(SERVER_XLSX)).strftime('%d/%m/%Y à %H:%M')
+elif os.path.exists(SERVER_CSV):
+    file_to_load = SERVER_CSV
+    mod_time = datetime.fromtimestamp(os.path.getmtime(SERVER_CSV)).strftime('%d/%m/%Y à %H:%M')
+elif os.path.exists(DEFAULT_XLSX):
+    file_to_load = DEFAULT_XLSX
+    mod_time = datetime.fromtimestamp(os.path.getmtime(DEFAULT_XLSX)).strftime('%d/%m/%Y à %H:%M')
+elif os.path.exists(DEFAULT_CSV):
+    file_to_load = DEFAULT_CSV
+    mod_time = datetime.fromtimestamp(os.path.getmtime(DEFAULT_CSV)).strftime('%d/%m/%Y à %H:%M')
+
+uploaded_file = st.sidebar.file_uploader("Mettre à jour le fichier DATA STOCK :", type=["xlsx", "csv"])
+
+# Si un nouveau fichier est déposé, on l'écrit en dur sur le serveur pour le mémoriser
 if uploaded_file is not None:
-    file_to_load = uploaded_file
-    mod_time = "À l'instant (Fichier importé)"
-    file_data_to_download = uploaded_file.getvalue()
-    download_name = uploaded_file.name
-else:
-    if os.path.exists(file_path_default): file_to_load = file_path_default
-    elif os.path.exists(fallback_path): file_to_load = fallback_path
-    else: file_to_load = None
+    if os.path.exists(SERVER_XLSX): os.remove(SERVER_XLSX)
+    if os.path.exists(SERVER_CSV): os.remove(SERVER_CSV)
+    
+    target_path = SERVER_CSV if uploaded_file.name.endswith('.csv') else SERVER_XLSX
+    with open(target_path, "wb") as f:
+        f.write(uploaded_file.getvalue())
+        
+    st.sidebar.success("Fichier mémorisé sur le serveur !")
+    st.cache_data.clear()
+    st.rerun()
 
-    if file_to_load:
-        mod_time = datetime.fromtimestamp(os.path.getmtime(file_to_load)).strftime('%d/%m/%Y à %H:%M')
-        with open(file_to_load, "rb") as f: file_data_to_download = f.read()
-        download_name = "DATA_STOCK_Extract.xlsx"
-    else:
-        st.title("📦 Tableau de Bord : Pilotage Magasin")
-        st.info("👋 Bienvenue ! Aucun fichier trouvé.\n\nVeuillez importer votre fichier de stock (Excel ou CSV) depuis le menu de gauche.")
-        st.stop()
+# Blocage de sécurité si aucun fichier n'existe nulle part
+if file_to_load is None:
+    st.title("📦 Tableau de Bord : Pilotage Magasin")
+    st.info("👋 Bienvenue ! Aucun fichier n'est mémorisé.\n\nVeuillez glisser votre fichier de stock (Excel ou CSV) une première fois dans le menu latéral gauche.")
+    st.stop()
 
 st.sidebar.info(f"📅 **Date des données actives :**\n\n{mod_time}")
-if 'file_data_to_download' in locals() and file_data_to_download:
-    st.sidebar.download_button("📥 Télécharger la base actuelle", data=file_data_to_download, file_name=download_name, use_container_width=True)
+
+with open(file_to_load, "rb") as f: file_data_to_download = f.read()
+download_name = "DATA_STOCK_Actuel.csv" if file_to_load.endswith('.csv') else "DATA_STOCK_Actuel.xlsx"
+st.sidebar.download_button("📥 Télécharger la base actuelle", data=file_data_to_download, file_name=download_name, use_container_width=True)
 
 st.sidebar.divider()
 st.sidebar.header("⚙️ Paramètres d'analyse")
 seuil_dormant = st.sidebar.number_input("Seuil Stock Dormant (jours) :", min_value=1, value=365, step=1)
 
-# Chargement et Préparation
+# Traitement des données chargées automatiquement
 df = load_base_data(file_to_load).copy()
 pattern = r'^([A-Za-z])(\d{2})([A-Za-z])(\d{2,3})$'
 extracted = df['LOCATOR'].astype(str).str.extract(pattern)
 df['Rangée'], df['Meuble'], df['Colonne'], df['Niveau'] = extracted[0].str.upper(), extracted[1], extracted[2].str.upper(), extracted[3]
 
-# INITIALISATION DU JUMEAU NUMÉRIQUE
+# Synchronisation initiale du Jumeau numérique
 df_valid_entries = df.dropna(subset=['Rangée'])
 if not st.session_state.master_locations:
     st.session_state.master_locations = set(df_valid_entries['LOCATOR'].unique())
@@ -261,12 +276,10 @@ if 'edit_meuble' not in st.session_state: st.session_state.edit_meuble = '01'
 total_refs = df['PART'].nunique()
 df_valide = df[df['LOCATOR'].isin(st.session_state.master_locations)]
 total_locs_magasin = df_valide['LOCATOR'].nunique()
-
 taux_occupation = (total_locs_magasin / CAPACITE_MAX_MAGASIN * 100) if CAPACITE_MAX_MAGASIN > 0 else 0
 
 list_exclus = list(st.session_state.exclusions.keys())
 df_dormants = df[(df['Last consumption'] > seuil_dormant) & (~df['PART'].isin(list_exclus))]
-
 nb_refs_dormantes = df_dormants['PART'].nunique()
 capital_dormant = df_dormants['Valeur Totale'].sum()
 pct_refs = (nb_refs_dormantes / total_refs * 100) if total_refs > 0 else 0
@@ -304,7 +317,6 @@ with tab1:
             st.plotly_chart(px.bar(top_loc, x='LOCATOR', y='Nb_Dormants', text_auto=True, labels={'Nb_Dormants': 'Nb. Réf. Dormantes'}, color_discrete_sequence=["#ff4b4b"]).update_layout(margin=dict(l=0, r=0, t=20, b=0), height=350), use_container_width=True)
             
     st.divider()
-    
     st.markdown("### 🔎 Base de données & Recherche")
     col_search1, col_search2 = st.columns(2)
     with col_search1: search_part = st.text_input("🔍 Rechercher une Référence (PART) :", "")
@@ -322,34 +334,23 @@ with tab1:
 # ONGLET 2 : VUE VISUELLE
 # ------------------------------------------
 with tab2:
-    col_title, col_gauge = st.columns([3, 1])
-    with col_title:
-        st.markdown("### Plan Interactif du Magasin")
-        st.markdown("""
-        <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #ccc; border-radius: 3px;'></div> <b>Vide (Sans stock)</b></div>
-            <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border-radius: 3px;'></div> <b>Inexistant</b></div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col_gauge:
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number", value=total_locs_magasin, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "Occupation", 'font': {'size': 14}},
-            gauge={'axis': {'range': [None, CAPACITE_MAX_MAGASIN]}, 'bar': {'color': "#00a8e8"},
-                   'steps': [{'range': [0, CAPACITE_MAX_MAGASIN*0.7], 'color': "#e0e4e8"}, {'range': [CAPACITE_MAX_MAGASIN*0.7, CAPACITE_MAX_MAGASIN*0.9], 'color': "#f1c40f"}, {'range': [CAPACITE_MAX_MAGASIN*0.9, CAPACITE_MAX_MAGASIN], 'color': "#ff4b4b"}],
-                   'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': CAPACITE_MAX_MAGASIN}}
-        ))
-        st.plotly_chart(fig_gauge.update_layout(margin=dict(l=10, r=60, t=60, b=10), height=200), use_container_width=True)
+    st.markdown("### Plan Interactif du Magasin")
+    st.markdown("""
+    <div style='display: flex; gap: 15px; font-size: 13px; margin-bottom: 20px; padding: 10px; background-color: #f8f9fa; border: 1px solid #eaeaea; border-radius: 8px; color: #333;'>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ff4b4b; border-radius: 3px;'></div> <b>Stock Dormant</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #f39c12; border-radius: 3px;'></div> <b>Pas de données</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #00a8e8; border-radius: 3px;'></div> <b>Actif</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #ffffff; border: 1px dashed #ccc; border-radius: 3px;'></div> <b>Vide (Sans stock)</b></div>
+        <div style='display: flex; align-items: center; gap: 5px;'><div style='width: 12px; height: 12px; background-color: #d1d8e0; border-radius: 3px;'></div> <b>Inexistant</b></div>
+    </div>
+    """, unsafe_allow_html=True)
 
     header_cols = st.columns([1] + [1]*max_rack, gap="small")
-    for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
+    for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
         
     for r in list_rangees:
         cols = st.columns([1] + [1]*max_rack, gap="small")
-        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
+        cols[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px;'>{r}</div>", unsafe_allow_html=True)
         
         for m in range(1, max_rack + 1):
             m_str = f"{m:02d}"
@@ -365,8 +366,7 @@ with tab2:
                         
                     if cols[m].button(m_str, key=f"btn_{r}_{m_str}", type=btn_type):
                         st.session_state.sel_rangee, st.session_state.sel_meuble = r, m_str
-            else:
-                cols[m].write("")
+            else: cols[m].write("")
 
     st.divider()
     r_sel, m_sel = st.session_state.sel_rangee, st.session_state.sel_meuble
@@ -383,37 +383,31 @@ with tab2:
         html_grid += f"<tr><td class='cell-niveau'>{niv}</td>"
         for col in colonnes:
             expected_loc = f"{r_sel}{m_sel}{col}{niv}"
-            
             if expected_loc not in st.session_state.master_locations:
                 html_grid += "<td class='cell-inexistant'>Inexistant</td>"
             else:
                 items = df_meuble[(df_meuble['Colonne'] == col) & (df_meuble['Niveau'] == niv)]
-                if items.empty:
-                    html_grid += "<td class='cell-vide'>Vide</td>"
+                if items.empty: html_grid += "<td class='cell-vide'>Vide</td>"
                 else:
                     parts_str = "<br>".join([str(p) for p in items['PART'].dropna().unique()])
                     has_dormant = not items[(items['Last consumption'] > seuil_dormant) & (~items['PART'].isin(list_exclus))].empty
                     has_unknown = items['Last consumption'].isna().any()
-                    
                     if has_dormant: html_grid += f"<td class='cell-dormant'>{parts_str}</td>"
                     elif has_unknown: html_grid += f"<td class='cell-inconnu'>{parts_str}</td>"
                     else: html_grid += f"<td class='cell-actif'>{parts_str}</td>"
         html_grid += "</tr>"
-    html_grid += "</table>"
-    st.markdown(html_grid, unsafe_allow_html=True)
+    st.markdown(html_grid + "</table>", unsafe_allow_html=True)
 
 # ------------------------------------------
 # ONGLET 3 : EXCLUSIONS
 # ------------------------------------------
 with tab3:
     st.markdown("### 🚫 Registre des dérogations")
-    st.info("Les références ajoutées dans cette liste seront totalement exclues du calcul des stocks dormants.")
-    
     with st.form("form_exclusion", clear_on_submit=True):
         col_form1, col_form2, col_form3 = st.columns([2, 3, 1])
         with col_form1: new_excl = st.text_input("Référence à exclure (PART) :")
         with col_form2: new_comm = st.text_input("Motif / Justification :")
-        with col_form3: 
+        with col_form3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.form_submit_button("➕ Ajouter") and new_excl:
                 st.session_state.exclusions[new_excl] = new_comm
@@ -422,7 +416,6 @@ with tab3:
 
     st.divider()
     if st.session_state.exclusions:
-        st.markdown("**Liste des exclusions actives :**")
         for excl, comm in list(st.session_state.exclusions.items()):
             col_list1, col_list2, col_list3 = st.columns([2, 5, 1])
             with col_list1: st.markdown(f"**{excl}**")
@@ -439,45 +432,34 @@ with tab3:
 # ------------------------------------------
 with tab4:
     st.markdown("### 🗄️ Éditeur Interactif du Jumeau Numérique")
-    st.info("Personnalisez l'architecture du magasin. **Cliquez sur l'entête d'une ligne ou d'une colonne** pour la désactiver d'un coup. Vous pouvez aussi ajouter ou supprimer de nouvelles sections en bas de page.")
-
-    # 1. Sélection du meuble à éditer
     header_cols_edit = st.columns([1] + [1]*max_rack, gap="small")
-    for i in range(1, max_rack + 1): header_cols_edit[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888; margin-bottom:2px;'>{i:02d}</div>", unsafe_allow_html=True)
+    for i in range(1, max_rack + 1): header_cols_edit[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
         
     for r in list_rangees:
         cols_edit = st.columns([1] + [1]*max_rack, gap="small")
-        cols_edit[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px; color:#31333F;'>{r}</div>", unsafe_allow_html=True)
-        
+        cols_edit[0].markdown(f"<div style='text-align:center; font-weight:900; font-size: 16px; margin-top:3px;'>{r}</div>", unsafe_allow_html=True)
         for m in range(1, max_rack + 1):
             m_str = f"{m:02d}"
             if is_meuble_valid_for_row(r, m):
                 is_selected = (st.session_state.edit_rangee == r and st.session_state.edit_meuble == m_str)
                 if cols_edit[m].button(m_str, key=f"btn_edit_{r}_{m_str}", type="primary" if is_selected else "secondary"):
                     st.session_state.edit_rangee, st.session_state.edit_meuble = r, m_str
-            else:
-                cols_edit[m].write("")
+            else: cols_edit[m].write("")
 
     st.divider()
     r_edit, m_edit = st.session_state.edit_rangee, st.session_state.edit_meuble
     st.markdown(f"### Modification : Rangée <span style='color:#00a8e8;'>{r_edit}</span> - Meuble <span style='color:#00a8e8;'>{m_edit}</span>", unsafe_allow_html=True)
-    
     colonnes_edit, niveaux_edit = get_meuble_structure(r_edit, m_edit)
         
-    # En-tête des colonnes (Boutons pour désactiver une colonne entière)
     cols_header = st.columns([1] + [1]*len(colonnes_edit))
     cols_header[0].markdown("<div style='text-align:center; color:#31333F; margin-top:10px;'><b>NIV / COL</b></div>", unsafe_allow_html=True)
     for j, col in enumerate(colonnes_edit):
         cols_header[j+1].button(f"↕️ {col}", key=f"tog_col_{r_edit}_{m_edit}_{col}", on_click=toggle_col, args=(r_edit, m_edit, col, niveaux_edit), use_container_width=True)
         
     st.write("") 
-    
-    # Boutons d'édition par niveau
     for niv in niveaux_edit:
         cols_grid = st.columns([1] + [1]*len(colonnes_edit))
-        # Bouton pour désactiver la ligne entière
         cols_grid[0].button(f"↔️ {niv}", key=f"tog_niv_{r_edit}_{m_edit}_{niv}", on_click=toggle_niv, args=(r_edit, m_edit, niv, colonnes_edit), use_container_width=True)
-        
         for j, col in enumerate(colonnes_edit):
             loc_id = f"{r_edit}{m_edit}{col}{niv}"
             exists = loc_id in st.session_state.master_locations
@@ -509,8 +491,7 @@ with tab4:
 
     st.divider()
     with st.expander("⚠️ Options de Réinitialisation"):
-        st.warning("Restaurer la grille théorique complète. **Attention**, vos meubles personnalisés seront perdus.")
-        if st.button("🔄 Forcer la grille théorique", type="primary"):
+        if st.button("🔄 Forcer la grille théorique complète", type="primary"):
             st.session_state.master_locations = set(generate_theoretical_locations())
             st.session_state.custom_structures = {}
             save_config()
