@@ -728,7 +728,7 @@ st.markdown("""
 
 
 
-    header_cols = st.columns([1] + [1]*max_rack, gap="small")
+header_cols = st.columns([1] + [1]*max_rack, gap="small")
 
     for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
 
