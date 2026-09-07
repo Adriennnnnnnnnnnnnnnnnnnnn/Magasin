@@ -716,7 +716,7 @@ with tab2:
 
     st.markdown("### Plan Interactif du Magasin")
 
-st.markdown("""
+    st.markdown("""
     <div style='display: flex; gap: 20px; font-size: 13px; margin-bottom: 25px; padding: 15px; background-color: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; color: #4b5563;'>
         <div style='display: flex; align-items: center; gap: 8px;'><div style='width: 14px; height: 14px; background-color: #fee2e2; border: 1px solid #fecaca; border-radius: 4px;'></div> <b>Stock Dormant</b></div>
         <div style='display: flex; align-items: center; gap: 8px;'><div style='width: 14px; height: 14px; background-color: #e0f2fe; border: 1px solid #bae6fd; border-radius: 4px;'></div> <b>Actif</b></div>
@@ -728,7 +728,7 @@ st.markdown("""
 
 
 
-header_cols = st.columns([1] + [1]*max_rack, gap="small")
+    header_cols = st.columns([1] + [1]*max_rack, gap="small")
 
     for i in range(1, max_rack + 1): header_cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#888;'>{i:02d}</div>", unsafe_allow_html=True)
 
